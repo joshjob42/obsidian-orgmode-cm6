@@ -12,5 +12,5 @@ bash codemirror-lang-orgmode/generate_grammar.sh > codemirror-lang-orgmode/src/g
 echo Wrote codemirror-lang-orgmode/src/generated_grammar.ts
 
 # we also generate the grammar for orgzly search
-bash generate_orgzly_search_grammar.sh > orgzly_search_generated_grammar.ts
-echo Wrote orgzly_search_generated_grammar.ts
+bash generate_boolean_expression_grammar.sh > boolean_expression_generated_grammar.ts
+echo Wrote boolean_expression_generated_grammar.ts

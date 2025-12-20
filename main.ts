@@ -14,7 +14,7 @@ import { OrgmodeTask, StatusType } from 'org-tasks';
 import { OrgTasksSync } from 'org-tasks-file-sync';
 import { makeHeadingsFoldable, iterateOrgIds } from 'language-extensions';
 import { orgmodeLivePreview } from "org-live-preview";
-import { computeQuery } from 'orgzly-search';
+import { Orgzly } from 'orgzly-search';
 import type { ConditionValue, ConditionResolver } from 'orgzly-search';
 import { moment } from 'obsidian';
 
@@ -30,15 +30,29 @@ class ConditionResolverObsidian implements ConditionResolver {
   constructor() {
     this.now = moment().valueOf()
   }
-  resolve(value: ConditionValue): string | number {
-    if ('date' in value) {
-      return moment(value['date']).startOf('day').valueOf()
-    }
+  private safeEval(toEval: string, task: OrgmodeTask) {
+      // equivalent of "return eval(toEval)"
+      // but only using "task" as context
+      // for example toEval="task.scheduled"
+      return (new Function('task', `return ${toEval}`))(task)
+  }
+  resolve(value: ConditionValue, task: OrgmodeTask): string | number {
     if ('text' in value) {
       return value['text']
     }
     if ('duration' in value) {
       return moment(this.now).add(...value['duration'] as any).startOf('day').valueOf()
+    }
+    if ('eval' in value) {
+      return this.safeEval(value['eval'], task)
+    }
+    if ('evalDateStartOfDay' in value) {
+      const evalDateStartOfDay = this.safeEval(value['evalDateStartOfDay'], task)
+      return moment(evalDateStartOfDay).startOf('day').valueOf()
+    }
+    if ('evalDate' in value) {
+      const evalDate = this.safeEval(value['evalDate'], task)
+      return moment(evalDate).valueOf()
     }
   }
 }
@@ -71,6 +85,17 @@ export class OrgmodeSettingTab extends PluginSettingTab {
           .setPlaceholder('comma-separated values')
           .onChange(async (value) => {
             this.plugin.settings.doneKeywords = parseKeywordTextArea(value)
+            await this.plugin.saveSettings();
+          })
+      })
+    new Setting(containerEl)
+      .setName("Default priority")
+      .setDesc('For sorting items without a priority')
+      .addText((text) => {
+        text.setValue(this.plugin.settings.defaultPriority)
+          .setPlaceholder("priority cookie like 'B'")
+          .onChange(async (value) => {
+            this.plugin.settings.defaultPriority = value
             await this.plugin.saveSettings();
           })
       })
@@ -134,9 +159,9 @@ export default class OrgmodePlugin extends Plugin {
         if (!tfile) {
           throw Error(`file not found: ${parameters.filepath}`)
         }
-        let query = "it.todo or it.done"  // backward compatibility
+        let orgzlyExpression = "it.todo or it.done"  // backward compatibility
         if (typeof parameters.query !== 'undefined') {
-          query = parameters.query
+          orgzlyExpression = parameters.query
         }
         const orgTasksSync = new OrgTasksSync(this.settings, this.orgmodeParser, this.app.vault)
         const rootEl = el.createEl("div");
@@ -150,14 +175,11 @@ export default class OrgmodePlugin extends Plugin {
         }
         let orgmode_tasks: Array<OrgmodeTask> = await orgTasksSync.getTasks(tfile)
         const resolver = new ConditionResolverObsidian()
-        if (query) {
-          orgmode_tasks = orgmode_tasks.filter(task => computeQuery(query, task, resolver, this.settings))
-        }
+        const orgzly = new Orgzly(this.settings, resolver)
+        orgmode_tasks = orgzly.search(orgzlyExpression, orgmode_tasks)
         this.render(orgmode_tasks, rootEl, onStatusChange)
         orgTasksSync.onmodified(tfile, (refreshed_tasks: OrgmodeTask[]) => {
-          if (query) {
-            refreshed_tasks = refreshed_tasks.filter(task => computeQuery(query, task, resolver, this.settings))
-          }
+          refreshed_tasks = orgzly.search(orgzlyExpression, refreshed_tasks)
           this.render(refreshed_tasks, rootEl, onStatusChange)
         })
       } catch (e) {

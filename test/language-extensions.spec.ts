@@ -11,6 +11,7 @@ import { extractLinkFromNode } from 'language-extensions';
 const settings: OrgmodePluginSettings = {
   todoKeywords: ["TODO"],
   doneKeywords: ["DONE"],
+  defaultPriority: 'B',
   hideStars: false,
 };
 const words = [...settings.todoKeywords, ...settings.doneKeywords]
