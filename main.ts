@@ -15,8 +15,9 @@ import { OrgTasksSync } from 'org-tasks-file-sync';
 import { makeHeadingsFoldable, iterateOrgIds } from 'language-extensions';
 import { orgmodeLivePreview } from "org-live-preview";
 import { Orgzly } from 'orgzly-search';
-import type { ConditionValue, ConditionResolver } from 'orgzly-search';
+import { ConditionValue, ConditionResolver, AgendaGroup, OrgzlyView } from 'orgzly-search';
 import { moment } from 'obsidian';
+import { orgzlyI18n_overdue } from "orgzly-l18n";
 
 let todoKeywordsReloader = new Compartment
 let vimCompartment = new Compartment
@@ -30,7 +31,7 @@ class ConditionResolverObsidian implements ConditionResolver {
   constructor() {
     this.now = moment().valueOf()
   }
-  private safeEval(toEval: string, task: OrgmodeTask) {
+  public safeEval(toEval: string, task: OrgmodeTask) {
       // equivalent of "return eval(toEval)"
       // but only using "task" as context
       // for example toEval="task.scheduled"
@@ -54,6 +55,23 @@ class ConditionResolverObsidian implements ConditionResolver {
       const evalDate = this.safeEval(value['evalDate'], task)
       return moment(evalDate).valueOf()
     }
+  }
+  agendaFormatDate(timestamp: number | "overdue"): string {
+    if (timestamp === "overdue") {
+      const locale: string = moment.locale()
+      if (orgzlyI18n_overdue.has(locale)) {
+        return orgzlyI18n_overdue.get(locale)
+      }
+      return orgzlyI18n_overdue.get("default")
+    }
+    let localizedDate: string = moment(timestamp).format("LLLL")
+    const currentYear = moment().year()
+    if (moment(timestamp).year() == currentYear) {
+      localizedDate = localizedDate.replace(new RegExp(`[, ]*${currentYear}.*$`), '')
+    } else {
+      localizedDate = localizedDate.replace(new RegExp(`${moment(timestamp).year()}.*$`), `${moment(timestamp).year()}`)
+    }
+    return localizedDate
   }
 }
 
@@ -173,14 +191,14 @@ export default class OrgmodePlugin extends Plugin {
         const onStatusChange = async (orgmode_task: OrgmodeTask) => {
           await orgTasksSync.updateTaskStatus(tfile, orgmode_task)
         }
-        let orgmode_tasks: Array<OrgmodeTask> = await orgTasksSync.getTasks(tfile)
+        const initial_orgmode_tasks: Array<OrgmodeTask> = await orgTasksSync.getTasks(tfile)
         const resolver = new ConditionResolverObsidian()
         const orgzly = new Orgzly(this.settings, resolver)
-        orgmode_tasks = orgzly.search(orgzlyExpression, orgmode_tasks)
-        this.render(orgmode_tasks, rootEl, onStatusChange)
+        const orgzly_view = orgzly.search(orgzlyExpression, initial_orgmode_tasks)
+        this.render(rootEl, orgzly_view, onStatusChange, resolver)
         orgTasksSync.onmodified(tfile, (refreshed_tasks: OrgmodeTask[]) => {
-          refreshed_tasks = orgzly.search(orgzlyExpression, refreshed_tasks)
-          this.render(refreshed_tasks, rootEl, onStatusChange)
+          const refreshed_orgzly_view = orgzly.search(orgzlyExpression, refreshed_tasks)
+          this.render(rootEl, refreshed_orgzly_view, onStatusChange, resolver)
         })
       } catch (e) {
           el.createEl("h3", {text: "Error: " + e.message});
@@ -189,48 +207,73 @@ export default class OrgmodePlugin extends Plugin {
     });
   }
 
-  private render(orgmode_tasks: Array<OrgmodeTask>, rootEl: HTMLElement, onStatusChange: (orgmode_task: OrgmodeTask) => void) {
+  private render(
+    rootEl: HTMLElement,
+    orgzlyView: OrgzlyView,
+    onStatusChange: (orgmode_task: OrgmodeTask) => void,
+    resolver: ConditionResolver,
+  ) {
     rootEl.innerHTML = ""
-    if (orgmode_tasks.length == 0) {
-      const list = rootEl.createEl("ul", { cls: "contains-task-list plugin-tasks-query-result tasks-layout-hide-urgency tasks-layout-hide-edit-button" });
-      list.createSpan({ cls: "tasks-list-text", text: 'Your search did not match any notes' })
+    if ('agendaView' in orgzlyView) {
+      const agenda_tasks = orgzlyView.agendaView
+      this.renderAgenda(rootEl, agenda_tasks, onStatusChange, resolver)
+      return
     }
-    const list = rootEl.createEl("ul", { cls: "contains-task-list plugin-tasks-query-result tasks-layout-hide-urgency tasks-layout-hide-edit-button" });
-    orgmode_tasks.forEach((orgmode_task, i) => {
-      this.renderTask(orgmode_task, i, list, onStatusChange)
+    if ('regularView' in orgzlyView) {
+      const orgmode_tasks = orgzlyView.regularView
+      this.renderTaskList(rootEl, orgmode_tasks, onStatusChange)
+      return
+    }
+  }
+
+  private renderTaskList(rootEl: HTMLElement, orgmode_tasks: OrgmodeTask[], onStatusChange: (orgmode_task: OrgmodeTask) => void) {
+    const list = rootEl.createEl("ul");
+    if (orgmode_tasks.length === 0) {
+        rootEl.createDiv({ text: 'Your search did not match any notes' })
+        return
+    }
+    orgmode_tasks.forEach((orgmode_task) => {
+      const li = list.createEl("li", {cls: "org-agenda-item"})
+      const taskMainLineDiv = li.createDiv({ cls: "org-agenda-item-line" })
+      this.renderTaskMainLine(taskMainLineDiv, orgmode_task, onStatusChange)
     })
   }
 
-  private renderTask(orgmode_task: OrgmodeTask, i: number, list: HTMLElement, onStatusChange: (orgmode_task: OrgmodeTask) => void) {
-      const li = list.createEl("li")
-      if (orgmode_task.statusType !== null) {
-        li.addClasses(["task-list-item", "plugin-tasks-list-item"])
-      }
-      li.setAttribute("data-line", i.toString())
-      li.setAttribute("data-task-priority", "normal")  // orgmode_task.priority
-      li.setAttribute("data-task-status-type", orgmode_task.statusType)
+  private renderAgenda(rootEl: HTMLElement, agenda_groups: AgendaGroup[], onStatusChange: (orgmode_task: OrgmodeTask) => void, resolver: ConditionResolver) {
+    const orgAgendaEl = rootEl.createDiv({ cls: "org-agenda" })
+    agenda_groups.forEach((agenda_groups) => {
+      orgAgendaEl.createDiv({ cls: "org-agenda-group-heading", text: resolver.agendaFormatDate(agenda_groups.date) })
+      const list = orgAgendaEl.createEl("ul");
+      agenda_groups.tasks.forEach(({task, sortKey}) => {
+        const orgmode_task = task
+        const li = list.createEl("li", {cls: "org-agenda-item"})
+        const taskMainLineDiv = li.createDiv({ cls: "org-agenda-item-line" })
+        this.renderTaskMainLine(taskMainLineDiv, orgmode_task, onStatusChange)
+        const taskAttributeLineDiv = li.createDiv({ cls: "org-agenda-item-line" })
+        taskAttributeLineDiv.createDiv({ cls: "org-agenda-item-gutter" })
+        taskAttributeLineDiv.createDiv({ cls: `org-agenda-item-date org-agenda-item-date-${sortKey}`, text: `${resolver.safeEval(`task.${sortKey}`, task)}` })
+      })
+    })
+  }
+
+  private renderTaskMainLine(taskMainLineDiv: HTMLElement, orgmode_task: OrgmodeTask, onStatusChange: (orgmode_task: OrgmodeTask) => void) {
+      const gutter = taskMainLineDiv.createDiv({ cls: "org-agenda-item-gutter" })
       if (orgmode_task.statusType === StatusType.DONE) {
-        li.setAttribute("data-task", "x")
-        li.setAttribute("data-task-status-name", "Done")
-        const input = li.createEl("input", { cls: "task-list-item-checkbox", type: "checkbox" })
-        input.setAttribute("data-line", i.toString())
+        // data-task and checked are needed for native checkbox styling
+        const input = gutter.createEl("input", { cls: "org-agenda-item-input", attr: {"data-task": "x"}, type: "checkbox" })
         input.checked = true
         input.addEventListener('click', e => {
           onStatusChange(orgmode_task)
         })
       } else if (orgmode_task.statusType === StatusType.TODO) {
-        li.setAttribute("data-task", "")
-        li.setAttribute("data-task-status-name", "Todo")
-        const input = li.createEl("input", { cls: "task-list-item-checkbox", type: "checkbox" })
-        input.setAttribute("data-line", i.toString())
+        // data-task and checked are needed for native checkbox styling
+        const input = gutter.createEl("input", { cls: "org-agenda-item-input", attr: {"data-task": " "}, type: "checkbox" })
         input.checked = false
         input.addEventListener('click', e => {
           onStatusChange(orgmode_task)
         })
-      } else {
-        li.createSpan({ cls: "list-bullet" })
       }
-      li.createSpan({ cls: "tasks-list-text" }).createSpan({ cls: "task-description" }).createSpan({ text: orgmode_task.description })
+      taskMainLineDiv.createSpan({ text: orgmode_task.description })
   }
 }
 

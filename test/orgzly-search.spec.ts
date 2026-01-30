@@ -4,6 +4,7 @@ import { Orgzly, parseBooleanExpression } from 'orgzly-search';
 import type { ConditionValue, ConditionResolver, IntermediateRepr, ExpOp } from 'orgzly-search';
 import { testTree } from "@lezer/generator/dist/test"
 import { OrgmodePluginSettings } from 'settings';
+import { orgzlyI18n_overdue } from 'orgzly-l18n';
 
 const moment = require('moment');  // replaces `import { moment } from 'obsidian'` for testing
 
@@ -19,7 +20,7 @@ class ConditionResolverNode implements ConditionResolver {
   constructor(epochMs: number) {
     this.now = moment(epochMs).valueOf()
   }
-  private safeEval(toEval: string, task: OrgmodeTask) {
+  public safeEval(toEval: string, task: OrgmodeTask) {
       // equivalent of "return eval(toEval)"
       // but only using "task" as context
       // for example toEval="task.scheduled"
@@ -44,13 +45,30 @@ class ConditionResolverNode implements ConditionResolver {
       return moment(evalDate).valueOf()
     }
   }
+  agendaFormatDate(timestamp: number | "overdue"): string {
+    if (timestamp === "overdue") {
+      const locale: string = moment.locale()
+      if (orgzlyI18n_overdue.has(locale)) {
+        return orgzlyI18n_overdue.get(locale)
+      }
+      return orgzlyI18n_overdue.get("default")
+    }
+    let localizedDate: string = moment(timestamp).format("LLLL")
+    const currentYear = moment().year()
+    if (moment(timestamp).year() == currentYear) {
+      localizedDate = localizedDate.replace(new RegExp(`[, ]*${currentYear}.*$`), '')
+    } else {
+      localizedDate = localizedDate.replace(new RegExp(`${moment(timestamp).year()}.*$`), `${moment(timestamp).year()}`)
+    }
+    return localizedDate
+  }
 }
 
 test("isolated conditions", () => {
     const epochMs =  moment('2022-07-15').valueOf()
     const resolver = new ConditionResolverNode(epochMs)
     const orgzly = new Orgzly(settings, resolver)
-    expect(orgzly.compile("d.today")["ir"]).toEqual([{'evalDateStartOfDay': 'task.scheduled'}, 'is', 'le', {'duration': [0, "d"]}])
+    expect(orgzly.compile("d.today")["ir"]).toEqual([{'evalDateStartOfDay': 'task.deadline'}, 'is', 'le', {'duration': [0, "d"]}])
     expect(orgzly.compile("s.today")["ir"]).toEqual([{'evalDateStartOfDay': 'task.scheduled'}, 'is', 'le', {'duration': [0, "d"]}])
     expect(orgzly.compile("d.le.2d")["ir"]).toEqual([{'evalDateStartOfDay': 'task.deadline'}, 'is', 'le', {'duration': [2, "d"]}])
     // expect(orgzly.compile("e.ge.now")["ir"]).toEqual([])
@@ -65,7 +83,8 @@ test("isolated conditions", () => {
     //expect(orgzly.compile("ps.b")["ir"]).toEqual([])
 
     expect(orgzly.compile("s.no")["ir"]).toEqual([{'evalDateStartOfDay': 'task.scheduled'}, 'is', 'le', {'text': null}])
-    expect(orgzly.compile("o.st")).toEqual({"ir": [], "sort": ["+status"]})
+    expect(orgzly.compile("o.st")).toEqual({"ir": [], "sort": ["+status", "+priority"], "agenda": null})
+    expect(orgzly.compile("ad.7")).toEqual({"ir": [], "sort": ["+priority"], "agenda": 7})
 })
 
 test("resolved conditions", () => {
@@ -181,12 +200,12 @@ test("orgzly executing", () => {
   }
 
   expect(orgzly.execute(
-    intermediateRepr, [], [task]
-  )).toStrictEqual([task])
+    intermediateRepr, [], null, [task]
+  )).toStrictEqual({regularView: [task]})
 
   expect(orgzly.execute(
-    intermediateRepr, [], [{...task, closed: "<2021-07-13 Fri 12:06>"}]
-  )).toStrictEqual([])
+    intermediateRepr, [], null, [{...task, closed: "<2021-07-13 Fri 12:06>"}]
+  )).toStrictEqual({regularView: []})
 })
 
 test("orgzly executing sorting", () => {
@@ -216,23 +235,93 @@ test("orgzly executing sorting", () => {
   const task5 = {...task, deadline: "<2021-07-15 Sun 14:28>" }
 
   expect(orgzly.execute(
-    intermediateRepr, ["+deadline"], [task, task2, task3, task4, task5]
-  )).toStrictEqual([
+    intermediateRepr, ["+deadline"], null, [task, task2, task3, task4, task5]
+  )).toStrictEqual({regularView: [
     task,
     task2,
     task3,
     task5,
     task4, // back in order
-  ])
+  ]})
 
   expect(orgzly.execute(
-    intermediateRepr, ["-deadline"], [task, task2, task3, task4, task5]
-  )).toStrictEqual([
+    intermediateRepr, ["-deadline"], null, [task, task2, task3, task4, task5]
+  )).toStrictEqual({regularView: [
     task4, // back in order
     task5,
     task3,
     task2,
     task,
+  ]})
+
+})
+
+test("orgzly agenda", () => {
+  const epochMs =  moment('2023-11-02 23:13:20').valueOf()
+  const resolver = new ConditionResolverNode(epochMs)
+  const orgzly = new Orgzly(settings, resolver)
+
+  const task: OrgmodeTask = {
+    status: 'DONE',
+    statusType: StatusType.DONE,
+    description: 'task',
+    priority: null,
+    taskLocation: {
+      priority: null,
+      status: [2, 6],
+      scheduled: [18, 39],
+      closed: [49, 70],
+      deadline: [82, 103],
+    },
+    closed: "",
+    deadline: "",
+    scheduled: "",
+  }
+  const task2 = {...task, description: "task2", deadline: "<2023-11-10 Thu 08:10>", scheduled: "2023-11-02 Thu 13:33>"}
+  const task3 = {...task, description: "task3", scheduled: "<2023-11-01 Thu 14:29>"}
+  const task4 = {...task, description: "task4", deadline: "<2023-11-03 Thu 15:02>"}
+  expect(orgzly.createAgenda([task, task2, task3, task4], [], 3)).toEqual([
+    {
+      date: "overdue",
+      tasks: [
+        { sortKey: "scheduled", task: task3 },
+      ]
+    },
+    {
+      date: moment('2023-11-02').valueOf(),
+      tasks: [
+        { sortKey: "scheduled", task: task2 },
+      ]
+    },
+    {
+      date: moment('2023-11-03').valueOf(),
+      tasks: [
+        { sortKey: "deadline", task: task4 },
+      ]
+    },
+    {
+      date: moment('2023-11-04').valueOf(),
+      tasks: [ ]
+    },
   ])
 
+  const taskWithoutTime = {...task, description: "task with time", scheduled: "<2023-11-02>"}
+  const taskWithTime = {...task, description: "task without time", scheduled: "<2023-11-02 15:01>"}
+  expect(orgzly.createAgenda([taskWithoutTime, taskWithTime], [], 3)).toEqual([
+    {
+      date: moment('2023-11-02').valueOf(),
+      tasks: [
+        { sortKey: "scheduled", task: taskWithTime },
+        { sortKey: "scheduled", task: taskWithoutTime },
+      ]
+    },
+    {
+      date: moment('2023-11-03').valueOf(),
+      tasks: [ ]
+    },
+    {
+      date: moment('2023-11-04').valueOf(),
+      tasks: [ ]
+    },
+  ])
 })

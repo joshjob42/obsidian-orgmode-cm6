@@ -6,7 +6,9 @@ import { OrgmodePluginSettings } from 'settings';
 
 export interface ConditionResolver {
   // interface needed to use moment.js with obsidian
+  safeEval: (toEval: string, task: OrgmodeTask) => any
   resolve: (value: ConditionValue, task: OrgmodeTask) => string | number
+  agendaFormatDate: (timestamp: number | "overdue") => string
 }
 
 const BooleanExpressionParser = buildParser(grammarFile.toString())
@@ -82,10 +84,13 @@ export type SortOrderChoice =
   | '+priority' | '-priority'
   | '+status' | '-status'  // state in orgzly query
 export type SortOrder = { sort: SortOrderChoice[] }
+export type AgendaRange = { agenda: number }
+export type SortOrderAgendaRange = { sort: SortOrderChoice[], agenda: number }
 export type IntermediateRepr =
   []  // all tasks
   | Condition
   | SortOrder
+  | AgendaRange
   | { and: IntermediateRepr[] }
   | { or: IntermediateRepr[] }
 export enum ExpOp {
@@ -97,9 +102,24 @@ export enum ExpOp {
   GE="ge",
 }
 export type Neg = "is" | "not"
+// TODO: tagged union for OrgmodeTask[] | AgendaGroups
+export type AgendaGroupItem = {
+  task: OrgmodeTask,
+  sortKey: "scheduled" | "deadline",
+}
+export type AgendaGroup = {
+  date: number | "overdue", // timestamp for i18n during rendering
+  tasks: AgendaGroupItem[]
+}
+type AgendaGroupsIr = Map<"overdue" | number, AgendaGroupItem[]>
+export type OrgzlyView =
+  | {regularView: OrgmodeTask[], agendaView?: never }
+  | {regularView?: never, agendaView: AgendaGroup[] }
 
 
-function parseCondition(conditionStr: string, settings: OrgmodePluginSettings): Condition | SortOrder {
+
+function parseCondition(conditionStr: string, settings: OrgmodePluginSettings): Condition | SortOrder | AgendaRange {
+  let initialConditionStr = conditionStr
   try {
     let negated: Neg = "is"
     if (conditionStr.startsWith(".")) {
@@ -109,7 +129,7 @@ function parseCondition(conditionStr: string, settings: OrgmodePluginSettings): 
     const words = conditionStr.split(".")
     const exp_key = words[0]
 
-    if (negated === "not" && ["s", "d", "d", "c", "cr"].includes(exp_key)) {
+    if (negated === "not" && ["s", "d", "d", "c", "cr", "ad"].includes(exp_key)) {
       throw Error(`Negation with leading '.' not supported in query for OP "${exp_key}"`)
     }
 
@@ -117,28 +137,31 @@ function parseCondition(conditionStr: string, settings: OrgmodePluginSettings): 
       const sortKey = words[1]
       const ascDescSymbol = (negated === "is") ? "+" : "-"
       if (['b', 'book', 'notebook'].includes(sortKey)) {
-        throw Error(`Could not parse condition "${conditionStr}"`)
+        throw Error(`Could not parse condition "${initialConditionStr}"`)
         // return {"sort": [`${ascDescSymbol}notebook`]}
       } else if (['t', 'title'].includes(sortKey)) {
-        throw Error(`Could not parse condition "${conditionStr}"`)
+        throw Error(`Could not parse condition "${initialConditionStr}"`)
         // return {"sort": [`${ascDescSymbol}title`]}
       } else if (['s', 'sched', 'scheduled'].includes(sortKey)) {
         return {"sort": [`${ascDescSymbol}scheduled`]}
       } else if (['d', 'dead', 'deadline'].includes(sortKey)) {
         return {"sort": [`${ascDescSymbol}deadline`]}
       } else if (['e', 'event'].includes(sortKey)) {
-        throw Error(`Could not parse condition "${conditionStr}"`)
+        throw Error(`Could not parse condition "${initialConditionStr}"`)
         // return {"sort": [`${ascDescSymbol}event`]}
       } else if (['c', 'close', 'closed'].includes(sortKey)) {
         return {"sort": [`${ascDescSymbol}closed`]}
       } else if (['cr', 'created'].includes(sortKey)) {
-        throw Error(`Could not parse condition "${conditionStr}"`)
+        throw Error(`Could not parse condition "${initialConditionStr}"`)
         // return {"sort": [`${ascDescSymbol}created`]}
       } else if (['p', 'pri', 'prio', 'priority'].includes(sortKey)) {
         return {"sort": [`${ascDescSymbol}priority`]}
       } else if (['st', 'state'].includes(sortKey)) {
-         return {"sort": [`${ascDescSymbol}status`]}
+        return {"sort": [`${ascDescSymbol}status`]}
       }
+    }
+    if (exp_key === "ad") {
+      return {"agenda": +words[1]}
     }
     if (["s", "d", "c"].includes(exp_key)) {
       let exp_op = ExpOp.EQ
@@ -172,14 +195,14 @@ function parseCondition(conditionStr: string, settings: OrgmodePluginSettings): 
       return [{'eval': `task.status`}, negated, ExpOp.EQ, {'text': stateRef}]
     } else if (exp_key === "it") {
       if (!Object.values(StatusType).includes(words[1].toUpperCase() as any)) {
-        throw Error(`Condition "${conditionStr}" is not valid`)
+        throw Error(`Condition "${initialConditionStr}" is not valid`)
       }
       const stateTypeRef = words[1].toUpperCase() as StatusType
       return [{'eval': `task.statusType ?? ""`}, negated, ExpOp.EQ, {'text': stateTypeRef}]
     }
-    throw Error(`Could not parse condition "${conditionStr}"`)
+    throw Error(`Could not parse condition "${initialConditionStr}"`)
   } catch {
-    throw Error(`Could not parse condition "${conditionStr}"`)
+    throw Error(`Could not parse condition "${initialConditionStr}"`)
   }
 }
 
@@ -238,19 +261,26 @@ export class Orgzly {
     this.resolver = resolver
   }
 
-  public search(orgzlyExpr: string, tasks: OrgmodeTask[]): OrgmodeTask[] {
-    const {ir, sort} = this.compile(orgzlyExpr)
-    return this.execute(ir, sort, tasks)
+  public search(orgzlyExpr: string, tasks: OrgmodeTask[]): OrgzlyView {
+    const {ir, sort, agenda} = this.compile(orgzlyExpr)
+    return this.execute(ir, sort, agenda, tasks)
   }
 
-  public compile(orgzlyExpr: string): {ir: IntermediateRepr, sort: SortOrderChoice[]} {
+  public compile(orgzlyExpr: string): {ir: IntermediateRepr, sort: SortOrderChoice[], agenda: number} {
     if (!orgzlyExpr) {
-      return {ir: [], sort: []}
+      return {ir: [], sort: [], agenda: null}
     }
     const { tree, normalizedExpr } = parseBooleanExpression(orgzlyExpr)
-    const sortOrderChoice: SortOrderChoice[] = []
-    const ir = this.computeExpression(tree.topNode.firstChild, normalizedExpr, sortOrderChoice)
-    return {ir: ir, sort: sortOrderChoice}
+    const sortOrderChoiceAgenda: SortOrderAgendaRange = {sort: [], agenda: null}
+    const ir = this.computeExpression(tree.topNode.firstChild, normalizedExpr, sortOrderChoiceAgenda)
+    // Orgzly documentation:
+    // > Default ordering of notes is by notebook name then priority.
+    // > If s or d are used in the query, they are also sorted by scheduled or deadline time.
+    // > They are always sorted by position in the notebook last.
+    if (!sortOrderChoiceAgenda.sort.includes("+priority") && !sortOrderChoiceAgenda.sort.includes("-priority")) {
+      sortOrderChoiceAgenda.sort.push("+priority")
+    }
+    return {ir: ir, sort: sortOrderChoiceAgenda.sort, agenda: sortOrderChoiceAgenda.agenda}
   }
 
   private compareDate(a: OrgmodeTask, b: OrgmodeTask, prop: string, asc: boolean) {
@@ -302,72 +332,134 @@ export class Orgzly {
     throw Error(`Cannot compare tasks with property "${prop}"`)
   }
 
-  private sortTasks(tasks: OrgmodeTask[], sortOrderChoice: SortOrderChoice[]): OrgmodeTask[] {
-    // Orgzly documentation:
-    // > Default ordering of notes is by notebook name then priority.
-    // > If s or d are used in the query, they are also sorted by scheduled or deadline time.
-    // > They are always sorted by position in the notebook last.
-    if (!sortOrderChoice.includes("+priority") && !sortOrderChoice.includes("-priority")) {
-      sortOrderChoice.push("+priority")
+  private sortStrategy(a: OrgmodeTask, b: OrgmodeTask, sortOrderChoice: SortOrderChoice[]): number {
+    let criteria = 0
+    for (const sortOrderCriteria of sortOrderChoice) {
+      const asc = sortOrderCriteria[0] === "+"
+      const prop = sortOrderCriteria.slice(1)
+      criteria = this.compareTasks(a, b, prop, asc)
+      if (criteria !== 0) {
+        return criteria
+      }
     }
-    tasks.sort((a, b) => {
-      let criteria = 0
-      for (const sortOrderCriteria of sortOrderChoice) {
-        const asc = sortOrderCriteria[0] === "+"
-        const prop = sortOrderCriteria.slice(1)
-        criteria = this.compareTasks(a, b, prop, asc)
-        if (criteria !== 0) {
-          return criteria
+    return criteria
+  }
+
+  public execute(ir: IntermediateRepr, sortOrderChoice: SortOrderChoice[], agenda: number, tasks: OrgmodeTask[]): OrgzlyView {
+    const filteredTasks = this.evalAllTasks(ir, tasks)
+    if (agenda === null) {
+      return {regularView: filteredTasks.sort((a, b) => this.sortStrategy(a, b, sortOrderChoice))}
+    }
+    return {agendaView: this.createAgenda(filteredTasks, sortOrderChoice, agenda)}
+  }
+
+  public createAgenda(tasks: OrgmodeTask[], sortOrderChoice: SortOrderChoice[], agenda: number): AgendaGroup[] {
+    // Create a map with all agenda days having an empty list of tasks
+    const agendaIr: AgendaGroupsIr = new Map()
+    agendaIr.set("overdue", [])
+    for (let i = 0; i < agenda; i++) {
+      agendaIr.set(+this.resolver.resolve({"duration": [i, "d"]}, null), [])
+    }
+
+    // Put the tasks in the relevant agenda days
+    const dates = Array.from(agendaIr.keys()).filter(element => element !== "overdue").sort()
+    // Sentinel value: the day after the last day of the agenda
+    dates.push(+this.resolver.resolve({"duration": [agenda, "d"]}, null))
+    const maybeAddAgendaItem = (date: number, task: OrgmodeTask, dateType: "deadline" | "scheduled") => {
+      const agendaGroupItem : AgendaGroupItem = {task: task, sortKey: dateType}
+      if (date < dates[0]) {
+        agendaIr.get("overdue").push(agendaGroupItem)
+        return
+      }
+      for (let i = 1; i < dates.length; i++) {
+        if (date >= dates[i-1] && date < dates[i]) {
+          agendaIr.get(dates[i-1]).push(agendaGroupItem)
+          return
         }
       }
-      return criteria
-    })
-    return tasks
-  }
-
-  public execute(ir: IntermediateRepr, sortOrderChoice: SortOrderChoice[], tasks: OrgmodeTask[]): OrgmodeTask[] {
-    if (Array.isArray(ir) && ir.length === 0) {
-      // no filtering ; all tasks
-      return this.sortTasks(tasks, sortOrderChoice)
     }
-    const result = []
     for (const task of tasks) {
-      if (this.evalTask(ir, task)) {
-        result.push(task)
-      }
+      const deadlineVal = +this.resolver.resolve({"evalDateStartOfDay": "task.deadline"}, normalizeTask(task))
+      maybeAddAgendaItem(deadlineVal, task, "deadline")
+      const scheduledVal = +this.resolver.resolve({"evalDateStartOfDay": "task.scheduled"}, normalizeTask(task))
+      maybeAddAgendaItem(scheduledVal, task, "scheduled")
     }
-    return this.sortTasks(result, sortOrderChoice)
+    if (agendaIr.get("overdue").length === 0) {
+      agendaIr.delete("overdue")
+    }
+
+    // sort inside each group
+    const agendaIr2: AgendaGroupsIr = new Map()
+    agendaIr.forEach((tasks, date) => {
+      agendaIr2.set(date, tasks.sort(({task: taskA, sortKey: dateTypeA}, {task: taskB, sortKey: dateTypeB}) => {
+        // From orgzly-revived docs: (https://www.orgzlyrevived.com/docs#search-agenda)
+        // > Ordering in the agenda view is different from the regular search view.
+        // > In the agenda view, notes are always sorted chronologically according to
+        // > their timestamps within each day.
+        const dateA = +this.resolver.resolve({"evalDate": `task.${dateTypeA}`}, normalizeTask(taskA))
+        const dateB = +this.resolver.resolve({"evalDate": `task.${dateTypeB}`}, normalizeTask(taskB))
+
+        // > Timestamps that include a date but no specific time of day will
+        // > be ordered later in the day.
+        // > For example, <2025-03-30 15:00> comes before <2025-03-30>.
+        const hasTimeRegex = /\d{2}:\d{2}/;
+        const hasDateATime = hasTimeRegex.test(this.resolver.safeEval(`task.${dateTypeA}`, taskA))
+        const hasDateBTime = hasTimeRegex.test(this.resolver.safeEval(`task.${dateTypeB}`, taskB))
+        if (hasDateATime && !hasDateBTime) {
+          return -1
+        }
+        if (!hasDateATime && hasDateBTime) {
+          return 1
+        }
+
+        // > When two notes have the same timestamps, the ordering will
+        // > be determined using the same criteria described in the Sorting section above.
+        if (dateA == dateB) {
+          return this.sortStrategy(taskA, taskB, sortOrderChoice)
+        }
+        return dateA - dateB
+      }))
+    })
+
+    const agendaGroups: AgendaGroup[] = Array.from(agendaIr2).map(([date, tasks]) => {
+      return {date: date, tasks: tasks}
+    })
+    return agendaGroups
   }
 
-  private isSortOrder(node: SyntaxNode, content: string, sortOrderChoice: string[]): boolean {
+  private isSortOrderOrAgenda(node: SyntaxNode, content: string, sortOrderChoiceAgenda: SortOrderAgendaRange): boolean {
     if (node.type.name === "Condition") {
       const conditionStr = content.slice(node.from, node.to)
       const condition = parseCondition(conditionStr, this.settings)
       if (!Array.isArray(condition) && "sort" in condition) {
-        sortOrderChoice.push(condition["sort"][0])
+        sortOrderChoiceAgenda.sort.push(condition["sort"][0])
+        return true
+      }
+      if (!Array.isArray(condition) && "agenda" in condition) {
+        sortOrderChoiceAgenda.agenda = condition["agenda"]
         return true
       }
     }
     return false
   }
 
-  private *iterateChildrenExcludingSortOrder(node: SyntaxNode, content: string, sortOrderChoice: string[]): Iterable<SyntaxNode> {
+  private *iterateChildrenExcludingSortOrder(node: SyntaxNode, content: string, sortOrderChoiceAgenda: SortOrderAgendaRange): Iterable<SyntaxNode> {
     if (!node.firstChild) {
       return
     }
     node = node.firstChild
-    if (!this.isSortOrder(node, content, sortOrderChoice)) {
+    if (!this.isSortOrderOrAgenda(node, content, sortOrderChoiceAgenda)) {
       yield node
     }
     while (node.nextSibling) {
       node = node.nextSibling
-      if (!this.isSortOrder(node, content, sortOrderChoice)) {
+      if (!this.isSortOrderOrAgenda(node, content, sortOrderChoiceAgenda)) {
         yield node
       }
     }
   }
 
-  private computeExpression(node: SyntaxNode, content: string, sortOrderChoice: string[]): IntermediateRepr {
+  private computeExpression(node: SyntaxNode, content: string, sortOrderChoiceAgenda: SortOrderAgendaRange): IntermediateRepr {
     if (!node) {
       return null
     }
@@ -377,14 +469,20 @@ export class Orgzly {
       if (!Array.isArray(condition) && "sort" in condition) {
         // only happens if there is only one order condition in the query
         // since we are filtering the children
-        sortOrderChoice.push(condition["sort"][0])
+        sortOrderChoiceAgenda.sort.push(condition["sort"][0])
+        return []
+      }
+      if (!Array.isArray(condition) && "agenda" in condition) {
+        // only happens if there is only one agenda condition in the query
+        // since we are filtering the children
+        sortOrderChoiceAgenda.agenda = condition["agenda"]
         return []
       }
       return condition
 
     }
-    const childrenExpr = [...this.iterateChildrenExcludingSortOrder(node, content, sortOrderChoice)]
-      .map(node => this.computeExpression(node, content, sortOrderChoice))
+    const childrenExpr = [...this.iterateChildrenExcludingSortOrder(node, content, sortOrderChoiceAgenda)]
+      .map(node => this.computeExpression(node, content, sortOrderChoiceAgenda))
     if (node.type.name === "And") {
       return {"and": childrenExpr}
     } else if (node.type.name === "Or") {
@@ -404,5 +502,19 @@ export class Orgzly {
       return evalCondition(condition, task, this.resolver)
     }
     throw Error(`Unexpected ir=${JSON.stringify(ir)}`)
+  }
+
+  public evalAllTasks(ir: IntermediateRepr, tasks: OrgmodeTask[]): OrgmodeTask[] {
+    if (Array.isArray(ir) && ir.length === 0) {
+      // no ir ; all tasks
+      return tasks
+    }
+    const result = []
+    for (const task of tasks) {
+      if (this.evalTask(ir, task)) {
+        result.push(task)
+      }
+    }
+    return result
   }
 }
