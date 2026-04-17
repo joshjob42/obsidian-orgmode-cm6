@@ -18,6 +18,7 @@ import { extractLinkFromNode, nodeTypeClass } from 'language-extensions';
 import { OrgmodePluginSettings, BULLET_CHARS } from "settings";
 import { SyntaxNode } from "@lezer/common"
 import { CompletionContext, CompletionResult, autocompletion } from "@codemirror/autocomplete"
+import { renderMath, finishRenderMath } from "obsidian"
 
 class ImageWidget extends WidgetType {
   path: string
@@ -262,6 +263,32 @@ class HorizontalRuleWidget extends WidgetType {
   }
 }
 
+class LaTeXMathWidget extends WidgetType {
+  source: string
+  isDisplay: boolean
+  constructor(source: string, isDisplay: boolean) {
+    super()
+    this.source = source
+    this.isDisplay = isDisplay
+  }
+  eq(other: LaTeXMathWidget) {
+    return this.source === other.source && this.isDisplay === other.isDisplay
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement(this.isDisplay ? "div" : "span")
+    wrapper.className = this.isDisplay ? "org-latex-math-display" : "org-latex-math-inline"
+    try {
+      const rendered = renderMath(this.source, this.isDisplay)
+      wrapper.appendChild(rendered)
+      finishRenderMath().catch(() => { /* MathJax finalize failure — leave element as-is */ })
+    } catch (e) {
+      wrapper.textContent = this.isDisplay ? `$$${this.source}$$` : `$${this.source}$`
+      wrapper.classList.add("org-latex-math-error")
+    }
+    return wrapper
+  }
+}
+
 class DynamicBlockWidget extends WidgetType {
   dynamicBlockParams: string
   dynamicBlockJsFilepath: string
@@ -479,6 +506,7 @@ function loadDecorations(
     readFileContent: (filePath: string) => Promise<any>
 }) {
   const builderBuffer = new Array<Range<Decoration>>
+  const mathExcludedRanges: Array<[number, number]> = []
   const selectionPos = state.selection.main
   syntaxTree(state).iterate({
     enter(node) {
@@ -487,6 +515,13 @@ function loadDecorations(
       if (nodeIsOrgLang && node.type.id === TOKEN.Block) {
         const firstLine = state.doc.lineAt(node.from)
         const lastLine = state.doc.lineAt(node.to-1)
+        const blockTypeLine = state.doc.sliceString(firstLine.from, firstLine.to).trim().toUpperCase()
+        if (blockTypeLine.startsWith("#+BEGIN_SRC") ||
+            blockTypeLine.startsWith("#+BEGIN_EXAMPLE") ||
+            blockTypeLine.startsWith("#+BEGIN_EXPORT") ||
+            blockTypeLine.startsWith("#+BEGIN_COMMENT")) {
+          mathExcludedRanges.push([firstLine.to, lastLine.from])
+        }
         for (let i = firstLine.number; i <= lastLine.number; ++i) {
           const line = state.doc.line(i)
           builderBuffer.push(
@@ -1052,7 +1087,57 @@ function loadDecorations(
       }
     },
   })
+  addMathDecorations(state, selectionPos, mathExcludedRanges, builderBuffer)
   return RangeSet.of(builderBuffer, true)
+}
+
+const mathPatterns: Array<{ re: RegExp, isDisplay: boolean, markerLen: number }> = [
+  { re: /\$\$([\s\S]+?)\$\$/g, isDisplay: true, markerLen: 2 },
+  { re: /\\\[([\s\S]+?)\\\]/g, isDisplay: true, markerLen: 2 },
+  { re: /\\\(([\s\S]+?)\\\)/g, isDisplay: false, markerLen: 2 },
+  // inline single-$: avoid matching across display $$ by requiring non-$ inside; avoid currency ($ followed by digit with no closing).
+  { re: /(?<![\\$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\w|\$)/g, isDisplay: false, markerLen: 1 },
+]
+
+function addMathDecorations(
+  state: EditorState,
+  selectionPos: { from: number, to: number },
+  excludedRanges: Array<[number, number]>,
+  builderBuffer: Array<Range<Decoration>>,
+) {
+  const docText = state.doc.toString()
+  const seen: Array<[number, number]> = []
+  for (const { re, isDisplay, markerLen } of mathPatterns) {
+    re.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = re.exec(docText)) !== null) {
+      const from = match.index
+      const to = from + match[0].length
+      if (excludedRanges.some(([r0, r1]) => from >= r0 && to <= r1)) continue
+      if (seen.some(([s0, s1]) => from < s1 && to > s0)) continue
+      seen.push([from, to])
+      const source = match[1]
+      const isSelected = isNodeSelected(selectionPos, { from, to })
+      if (isSelected) {
+        builderBuffer.push(
+          buildRange(from, to, Decoration.mark({ class: "org-latex-math-source" }), 50),
+        )
+      } else {
+        builderBuffer.push(
+          buildRange(
+            from,
+            to,
+            Decoration.replace({
+              widget: new LaTeXMathWidget(source, isDisplay),
+              block: isDisplay,
+            }),
+            50,
+          ),
+        )
+      }
+      void markerLen // reserved for future source-masking UX
+    }
+  }
 }
 
 async function orgIdLinkCompletions(
