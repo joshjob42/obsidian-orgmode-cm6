@@ -186,6 +186,26 @@
   margin: 0.5em 0;
 }
 
+.orgmode-view .org-latex-math-inline {
+  display: inline;
+}
+
+.orgmode-view .org-latex-math-display {
+  display: block;
+  text-align: center;
+  margin: 0.5em 0;
+}
+
+.orgmode-view .org-latex-math-error {
+  color: var(--text-error, crimson);
+  font-family: var(--font-monospace);
+}
+
+.orgmode-view .org-latex-math-source {
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+}
+
 .orgmode-view .org-fixed-width {
   font-family: var(--font-monospace);
   background-color: var(--code-background);
