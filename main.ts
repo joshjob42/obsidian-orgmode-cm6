@@ -16,6 +16,8 @@ import { makeHeadingsFoldable, iterateOrgIds, alignTable, listAutoIndent, listIn
 import { orgmodeLivePreview } from "org-live-preview";
 import { extractOrgMetadata, writeOrgFrontmatter, OrgCachedMetadata } from "org-metadata";
 import { orgPropertiesTray } from "org-properties-tray";
+import { OrgShadowIndex } from "org-shadow-index";
+import { registerOrgEmbedPostProcessor } from "org-embed-renderer";
 import * as crypto from "crypto";
 import { Orgzly } from 'orgzly-search';
 import { ConditionValue, ConditionResolver, AgendaGroup, OrgzlyView } from 'orgzly-search';
@@ -170,6 +172,32 @@ export class OrgmodeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       })
+    new Setting(containerEl)
+      .setName("Shadow markdown index")
+      .setDesc("Emit companion .md files under a folder so Obsidian's full-text search and graph view see org content. Clicking a shadow opens the real .org file.")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.shadowIndexEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.shadowIndexEnabled = value
+            await this.plugin.saveSettings();
+            if (value && this.plugin.shadowIndex) {
+              this.plugin.shadowIndex.syncAll().catch(e => console.error(e))
+            }
+          })
+      })
+    new Setting(containerEl)
+      .setName("Shadow index folder")
+      .setDesc("Folder where shadow .md files are stored. Must not start with a dot (Obsidian won't index dot-folders).")
+      .addText((text) => {
+        text.setValue(this.plugin.settings.shadowIndexFolder)
+          .setPlaceholder("_o")
+          .onChange(async (value) => {
+            const cleaned = value.replace(/^\/+|\/+$/g, "").trim()
+            if (!cleaned || cleaned.startsWith(".")) return
+            this.plugin.settings.shadowIndexFolder = cleaned
+            await this.plugin.saveSettings();
+          })
+      })
   }
 }
 
@@ -178,6 +206,7 @@ export default class OrgmodePlugin extends Plugin {
   settings: OrgmodePluginSettings;
   orgmodeParser: LRParser
   settingTab: OrgmodeSettingTab = null;
+  shadowIndex: OrgShadowIndex = null;
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -491,6 +520,32 @@ export default class OrgmodePlugin extends Plugin {
       }
     }))
     this.app.workspace.onLayoutReady(() => { this.populateAllOrgFiles() })
+
+    this.shadowIndex = new OrgShadowIndex(
+      this.app,
+      this.orgmodeParser,
+      this.settings,
+      (cb) => this.register(cb),
+    )
+    this.shadowIndex.onload().catch(e => console.error("[orgmode-cm6] shadow init", e))
+
+    this.addCommand({
+      id: "rebuild-shadow-index",
+      name: "Rebuild shadow index",
+      callback: async () => {
+        if (!this.shadowIndex) return
+        new Notice("Rebuilding shadow index…")
+        try {
+          await this.shadowIndex.rebuildAll()
+          new Notice("Shadow index rebuilt.")
+        } catch (e) {
+          console.error("[orgmode-cm6] rebuild shadow", e)
+          new Notice("Shadow rebuild failed — see console.")
+        }
+      },
+    })
+
+    registerOrgEmbedPostProcessor(this)
 
     this.registerMarkdownCodeBlockProcessor("orgmode-tasks", async (src, el, ctx) => {
       try {
