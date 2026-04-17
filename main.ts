@@ -14,6 +14,9 @@ import { OrgmodeTask, StatusType } from 'org-tasks';
 import { OrgTasksSync } from 'org-tasks-file-sync';
 import { makeHeadingsFoldable, iterateOrgIds, alignTable, listAutoIndent, listIndent, listDedent, listContinueLine, toggleFoldAtCursor } from 'language-extensions';
 import { orgmodeLivePreview } from "org-live-preview";
+import { extractOrgMetadata, writeOrgFrontmatter, OrgCachedMetadata } from "org-metadata";
+import { orgPropertiesTray } from "org-properties-tray";
+import * as crypto from "crypto";
 import { Orgzly } from 'orgzly-search';
 import { ConditionValue, ConditionResolver, AgendaGroup, OrgzlyView } from 'orgzly-search';
 import { moment } from 'obsidian';
@@ -118,12 +121,41 @@ export class OrgmodeSettingTab extends PluginSettingTab {
           })
       })
     new Setting(containerEl)
-      .setName('Hide heading stars')
-      .setDesc('Hiding the stars is useful when using CSS to replace them')
+      .setName('Heading display style')
+      .setDesc('How heading prefixes are displayed')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption('stars', 'Show stars (* ** ***)')
+          .addOption('noStars', 'Hide stars')
+          .addOption('hashmarks', 'Show as # marks')
+          .setValue(this.plugin.settings.headingStyle)
+          .onChange(async (value: 'stars' | 'noStars' | 'hashmarks') => {
+            this.plugin.settings.headingStyle = value
+            this.plugin.settings.hideStars = (value !== 'stars')
+            await this.plugin.saveSettings();
+          })
+      })
+    new Setting(containerEl)
+      .setName('List bullet style')
+      .setDesc('How unordered list bullets are displayed')
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption('dash', 'Plain dashes (- - -)')
+          .addOption('unicode', 'Unicode bullets (• ◦ ▪ ▹)')
+          .addOption('none', 'Hide bullets')
+          .setValue(this.plugin.settings.bulletStyle)
+          .onChange(async (value: 'dash' | 'unicode' | 'none') => {
+            this.plugin.settings.bulletStyle = value
+            await this.plugin.saveSettings();
+          })
+      })
+    new Setting(containerEl)
+      .setName('Linkify plain URLs')
+      .setDesc('Make bare URLs clickable (like Obsidian markdown). Default off preserves org-mode behavior where bare URLs are plain text.')
       .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.hideStars)
+        toggle.setValue(this.plugin.settings.linkifyPlainUrls)
           .onChange(async (value) => {
-            this.plugin.settings.hideStars = value
+            this.plugin.settings.linkifyPlainUrls = value
             await this.plugin.saveSettings();
           })
       })
@@ -169,6 +201,262 @@ export default class OrgmodePlugin extends Plugin {
     return new OrgView(leaf, this.orgmodeParser, this.settings);
   };
 
+  private computeHash(content: string): string {
+    return crypto.createHash("sha256").update(content).digest("hex")
+  }
+
+  private populateMetadataForFile = async (file: any): Promise<void> => {
+    if (!file || file.extension !== "org") return
+    let content: string
+    try {
+      content = await this.app.vault.cachedRead(file)
+    } catch (e) {
+      return
+    }
+    const metadata = extractOrgMetadata(this.orgmodeParser, content)
+    const mc = this.app.metadataCache as any
+    const hash = this.computeHash(content)
+    if (!mc.fileCache || !mc.metadataCache) return
+    mc.fileCache[file.path] = { mtime: file.stat.mtime, size: file.stat.size, hash }
+    mc.metadataCache[hash] = metadata
+    if (typeof mc.resolveLinks === "function") {
+      try { mc.resolveLinks(file.path) } catch (e) { /* swallow */ }
+    }
+    mc.trigger("changed", file, content, metadata)
+    mc.trigger("resolve", file)
+    this.refreshPropertiesViewFor(file)
+  }
+
+  private refreshPropertiesViewFor = (file: any): void => {
+    const leaves = this.app.workspace.getLeavesOfType("file-properties")
+    for (const leaf of leaves) {
+      const view = leaf.view as any
+      if (view && view.file === file && typeof view.onFileChange === "function") {
+        try { view.onFileChange(file) } catch (e) { /* swallow */ }
+      }
+    }
+  }
+
+  private populateAllOrgFiles = async (): Promise<void> => {
+    const orgFiles = this.app.vault.getFiles().filter((f: any) => f.extension === "org")
+    for (const f of orgFiles) {
+      await this.populateMetadataForFile(f)
+    }
+  }
+
+  private clearMetadataForFile = (file: any): void => {
+    if (!file || file.extension !== "org") return
+    const mc = this.app.metadataCache as any
+    if (!mc.fileCache) return
+    const entry = mc.fileCache[file.path]
+    delete mc.fileCache[file.path]
+    if (entry && entry.hash && mc.metadataCache) delete mc.metadataCache[entry.hash]
+    mc.trigger("deleted", file, entry)
+  }
+
+  private patchOutlineView = (): void => {
+    const patchProto = (proto: any) => {
+      if (proto.__orgPatched) return
+      const orig = proto.getHeadings
+      proto.getHeadings = function (this: any) {
+        const file = this.file
+        if (file && file.extension === "org") {
+          const cache = this.app.metadataCache.getCache(file.path)
+          return cache?.headings || []
+        }
+        return orig.call(this)
+      }
+      proto.__orgPatched = true
+      proto.__origGetHeadings = orig
+      this.register(() => {
+        if (proto.__orgPatched) {
+          proto.getHeadings = proto.__origGetHeadings
+          delete proto.__origGetHeadings
+          delete proto.__orgPatched
+        }
+      })
+    }
+    const attempt = async () => {
+      for (const leaf of this.app.workspace.getLeavesOfType("outline")) {
+        if (typeof (leaf as any).loadIfDeferred === "function") {
+          try { await (leaf as any).loadIfDeferred() } catch (e) { /* skip */ }
+        }
+        if (leaf.view) patchProto(Object.getPrototypeOf(leaf.view))
+      }
+    }
+    attempt()
+    this.registerEvent(this.app.workspace.on("layout-change", attempt))
+    this.registerEvent(this.app.workspace.on("active-leaf-change", attempt))
+  }
+
+  private patchPropertiesView = (): void => {
+    const plugin = this
+    const patchProto = (proto: any) => {
+      if (proto.__orgPatched) return
+      const origIsSupported = proto.isSupportedFile
+      const origUpdate = proto.updateFrontmatter
+      const origSave = proto.saveFrontmatter
+      proto.isSupportedFile = function (file: any) {
+        if (file && file.extension === "org") return true
+        return origIsSupported.call(this, file)
+      }
+      proto.updateFrontmatter = function (file: any, content: string) {
+        if (file && file.extension === "org") {
+          const cache = this.app.metadataCache.getCache(file.path)
+          this.rawFrontmatter = ""
+          this.frontmatter = cache?.frontmatter || {}
+          return
+        }
+        return origUpdate.call(this, file, content)
+      }
+      proto.saveFrontmatter = function (newFrontmatter: any) {
+        const file = this.file
+        if (file && file.extension === "org" && file === this.modifyingFile) {
+          return this.app.vault.process(file, (text: string) => {
+            try {
+              return writeOrgFrontmatter(plugin.orgmodeParser, text, newFrontmatter || {})
+            } catch (e) {
+              console.error("[orgmode-cm6] writeOrgFrontmatter failed", e)
+              return text
+            }
+          })
+        }
+        return origSave.call(this, newFrontmatter)
+      }
+      proto.__orgPatched = true
+      proto.__origIsSupportedFile = origIsSupported
+      proto.__origUpdateFrontmatter = origUpdate
+      proto.__origSaveFrontmatter = origSave
+      plugin.register(() => {
+        if (proto.__orgPatched) {
+          proto.isSupportedFile = proto.__origIsSupportedFile
+          proto.updateFrontmatter = proto.__origUpdateFrontmatter
+          proto.saveFrontmatter = proto.__origSaveFrontmatter
+          delete proto.__origIsSupportedFile
+          delete proto.__origUpdateFrontmatter
+          delete proto.__origSaveFrontmatter
+          delete proto.__orgPatched
+        }
+      })
+    }
+    const attempt = async () => {
+      for (const leaf of this.app.workspace.getLeavesOfType("file-properties")) {
+        if (typeof (leaf as any).loadIfDeferred === "function") {
+          try { await (leaf as any).loadIfDeferred() } catch (e) { /* skip */ }
+        }
+        if (leaf.view) patchProto(Object.getPrototypeOf(leaf.view))
+      }
+    }
+    attempt()
+    this.registerEvent(this.app.workspace.on("layout-change", attempt))
+    this.registerEvent(this.app.workspace.on("active-leaf-change", attempt))
+  }
+
+  private patchMetadataCacheGetCache = (): void => {
+    const mc = this.app.metadataCache as any
+    if (mc.__orgPatched) return
+    const orig = mc.getCache.bind(mc)
+    mc.__orgPatched = true
+    mc.__origGetCache = orig
+    mc.getCache = function (path: string) {
+      if (typeof path === "string" && path.toLowerCase().endsWith(".org")) {
+        if (!mc.fileCache || !mc.fileCache[path]) return null
+        const hash = mc.fileCache[path].hash
+        return mc.metadataCache?.[hash] || null
+      }
+      return orig(path)
+    }
+    this.register(() => {
+      if (mc.__orgPatched && mc.__origGetCache) {
+        mc.getCache = mc.__origGetCache
+        delete mc.__origGetCache
+        delete mc.__orgPatched
+      }
+    })
+  }
+
+  private registerOrgLinkUpdater = (): void => {
+    const convertToOrgLinkForm = (change: string, reference: any): string => {
+      // `change` is Obsidian-formatted, e.g. `[[newpath]]` or `[[newpath|alias]]`.
+      // Strip the wrapping and extract link/alias.
+      const m = change.match(/^\[\[([^\]]+?)(?:\|([^\]]+))?\]\]$/)
+      if (!m) return change
+      const newLink = m[1]
+      const obsidianAlias = m[2]
+      // Org files use `[[link][display]]`. Preserve the prior display text if
+      // the user had one and Obsidian didn't override it.
+      const origDisplay: string | undefined = reference?.displayText
+      const origRaw: string | undefined = reference?.original
+      const origHadAlias = !!(origRaw && origRaw.includes(']['))
+      const aliasToKeep = obsidianAlias ?? (origHadAlias ? origDisplay : undefined)
+      if (aliasToKeep && aliasToKeep !== newLink) {
+        return `[[${newLink}][${aliasToKeep}]]`
+      }
+      return `[[${newLink}]]`
+    }
+
+
+    const mc = this.app.metadataCache as any
+    if (!mc.linkUpdaters) return
+    const plugin = this
+    const getLinksForPath = (path: string) => {
+      const fc = mc.fileCache?.[path]
+      if (!fc) return []
+      const meta = mc.metadataCache?.[fc.hash]
+      return meta?.links || []
+    }
+    mc.linkUpdaters.org = {
+      app: this.app,
+      iterateReferencesForFile(path: string, cb: (ref: any) => any) {
+        for (const ref of getLinksForPath(path)) {
+          cb(ref)
+        }
+      },
+      iterateReferences(cb: (path: string, ref: any) => any) {
+        const files = plugin.app.vault.getFiles().filter((f: any) => f.extension === "org")
+        for (const f of files) {
+          for (const ref of getLinksForPath(f.path)) {
+            cb(f.path, ref)
+          }
+        }
+      },
+      async applyUpdates(file: any, updates: Array<{ reference: any; change: string }>) {
+        if (!updates || !updates.length) return
+        await plugin.app.vault.process(file, (text: string) => {
+          const seen = new Set<string>()
+          const edits: Array<{ start: number; end: number; text: string }> = []
+          for (const u of updates) {
+            if (!u.reference || !u.reference.position) continue
+            let start = u.reference.position.start.offset
+            let end = u.reference.position.end.offset
+            const original: string | undefined = u.reference.original
+            // The cached positions may be stale relative to the current text
+            // (e.g. file was just edited externally). Validate and relocate.
+            if (original) {
+              if (text.substring(start, end) !== original) {
+                const idx = text.indexOf(original)
+                if (idx < 0) continue   // can't find the link — skip
+                start = idx
+                end = idx + original.length
+              }
+            }
+            const key = `${start}-${end}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            const replacement = convertToOrgLinkForm(u.change, u.reference)
+            edits.push({ start, end, text: replacement })
+          }
+          edits.sort((a, b) => b.start - a.start)
+          for (const e of edits) {
+            text = text.substring(0, e.start) + e.text + text.substring(e.end)
+          }
+          return text
+        })
+      },
+      renameSubpath(_oldPath: string, _newPath: string, _subpath: string) { /* no-op */ },
+    }
+  }
+
   async onload() {
     await this.loadSettings();
     this.settingTab = new OrgmodeSettingTab(this.app, this)
@@ -176,6 +464,33 @@ export default class OrgmodePlugin extends Plugin {
 
     this.registerView("orgmode", this.orgViewCreator);
     this.registerExtensions(["org"], "orgmode");
+    this.patchMetadataCacheGetCache()
+    this.registerOrgLinkUpdater()
+    this.app.workspace.onLayoutReady(() => {
+      this.patchOutlineView()
+      this.patchPropertiesView()
+    })
+
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      if ((file as any).extension === "org") this.populateMetadataForFile(file)
+    }))
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if ((file as any).extension === "org") this.populateMetadataForFile(file)
+    }))
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      if ((file as any).extension === "org") this.clearMetadataForFile(file)
+    }))
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if ((file as any).extension === "org") {
+        const mc = this.app.metadataCache as any
+        if (mc.fileCache && mc.fileCache[oldPath]) {
+          mc.fileCache[file.path] = mc.fileCache[oldPath]
+          delete mc.fileCache[oldPath]
+        }
+        this.populateMetadataForFile(file)
+      }
+    }))
+    this.app.workspace.onLayoutReady(() => { this.populateAllOrgFiles() })
 
     this.registerMarkdownCodeBlockProcessor("orgmode-tasks", async (src, el, ctx) => {
       try {
@@ -440,6 +755,14 @@ class OrgView extends TextFileView {
               return
             }
           },
+          getLinkSuggestions: () => {
+            try {
+              return (this.app.metadataCache as any).getLinkSuggestions()
+            } catch (e) {
+              console.log(e)
+              return []
+            }
+          },
           listOrgIds: async () => {
             try {
               const orgFiles = this.app.vault.getFiles().filter(x => x.extension == 'org')
@@ -462,8 +785,20 @@ class OrgView extends TextFileView {
                 throw Error(`File not found: ${filePath}`)
             }
             return await this.app.vault.read(tfile)
-          }
+          },
+          triggerHoverLink: (payload: { event: MouseEvent; linktext: string; targetEl: HTMLElement; sourcePath: string }) => {
+            ;(this.app.workspace as any).trigger("hover-link", {
+              event: payload.event,
+              source: "orgmode",
+              hoverParent: this,
+              linktext: payload.linktext,
+              targetEl: payload.targetEl,
+              sourcePath: payload.sourcePath,
+            })
+          },
+          getSourcePath: () => this.file?.path ?? "",
         }),
+        orgPropertiesTray(this.app, orgmodeParser, () => this.file),
       ]
     Vim.defineEx('write', 'w', () => {
         this.save()
@@ -483,6 +818,35 @@ class OrgView extends TextFileView {
 
   clear = () => {
   };
+
+  // Scroll to a heading or anchor after navigation via [[file#Heading]].
+  // Called by Obsidian's link-opening flow with eState.subpath = "#Heading".
+  setEphemeralState(state: any): void {
+    super.setEphemeralState(state)
+    const subpath = state?.subpath
+    if (!subpath || typeof subpath !== "string") return
+    const target = subpath.replace(/^#+/, "").trim()
+    if (!target) return
+    const content = this.codeMirror.state.doc.toString()
+    // Try exact-text heading match (case-insensitive, trimmed).
+    const lines = content.split("\n")
+    let pos = 0
+    for (const line of lines) {
+      const m = line.match(/^(\*+)\s+(.*?)\s*(?::[\w@%:#]+:)?\s*$/)
+      if (m) {
+        const title = m[2].replace(/^(?:TODO|DONE|[A-Z]{2,}|\[#[A-Z]\])\s+/g, "").trim()
+        if (title.toLowerCase() === target.toLowerCase()) {
+          this.codeMirror.dispatch({
+            selection: { head: pos, anchor: pos },
+            effects: EditorView.scrollIntoView(pos, { y: "start" }),
+          })
+          this.codeMirror.focus()
+          return
+        }
+      }
+      pos += line.length + 1
+    }
+  }
 
   getDisplayText() {
     if (this.file) {

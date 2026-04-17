@@ -3,7 +3,10 @@ export interface OrgmodePluginSettings {
   doneKeywords: string[];
   defaultPriority: string;
   hideStars: boolean;
-  dynamicBlockJsFilepath: string
+  dynamicBlockJsFilepath: string;
+  bulletStyle: 'dash' | 'unicode' | 'none';
+  headingStyle: 'stars' | 'noStars' | 'hashmarks';
+  linkifyPlainUrls: boolean;
 }
 
 export const DEFAULT_SETTINGS: OrgmodePluginSettings = {
@@ -12,4 +15,13 @@ export const DEFAULT_SETTINGS: OrgmodePluginSettings = {
   defaultPriority: 'B',
   hideStars: false,
   dynamicBlockJsFilepath: "",
+  bulletStyle: 'unicode',
+  headingStyle: 'stars',
+  linkifyPlainUrls: false,
+};
+
+export const BULLET_CHARS: Record<string, string[]> = {
+  'dash': ['-', '-', '-', '-', '-', '-'],
+  'unicode': ['•', '◦', '▪', '▹', '•', '◦'],
+  'none': ['', '', '', '', '', ''],
 };

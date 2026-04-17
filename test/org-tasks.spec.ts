@@ -11,7 +11,10 @@ const settings: OrgmodePluginSettings = {
   doneKeywords: ["DONE"],
   defaultPriority: 'B',
   hideStars: false,
-  dynamicBlockJsFilepath: ""
+  dynamicBlockJsFilepath: "",
+  bulletStyle: 'unicode',
+  headingStyle: 'stars',
+  linkifyPlainUrls: false,
 };
 const words = [...settings.todoKeywords, ...settings.doneKeywords]
 const orgmodeParser: LRParser = OrgmodeParser(words)

@@ -365,12 +365,26 @@ export function listIndent(view: EditorView): boolean {
   const cursorPos = state.selection.main.head
   const line = state.doc.lineAt(cursorPos)
   const lineText = line.text
+  const orderedMatch = lineText.match(/^(\s*)(\d+)([.)]) /)
   if (!lineText.match(/^\s*(?:[-+]|\d+[.)])\s/)) return false
-  // Add 2 spaces of indentation
-  view.dispatch({
-    changes: { from: line.from, to: line.from, insert: "  " },
-    selection: { anchor: cursorPos + 2 },
-  })
+  if (orderedMatch) {
+    // Reset number to 1 when indenting (new sub-list)
+    const indent = orderedMatch[1]
+    const sep = orderedMatch[3]
+    const oldPrefix = orderedMatch[0]
+    const newPrefix = indent + "  1" + sep + " "
+    const cursorOffset = newPrefix.length - oldPrefix.length
+    view.dispatch({
+      changes: { from: line.from, to: line.from + oldPrefix.length, insert: newPrefix },
+      selection: { anchor: cursorPos + cursorOffset },
+    })
+  } else {
+    // Unordered: just add 2 spaces
+    view.dispatch({
+      changes: { from: line.from, to: line.from, insert: "  " },
+      selection: { anchor: cursorPos + 2 },
+    })
+  }
   return true
 }
 

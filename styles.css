@@ -192,6 +192,22 @@
   padding: 2px 4px;
 }
 
+.orgmode-view .org-bullet {
+  color: var(--list-marker-color, var(--text-muted));
+  font-size: 1.2em;
+  line-height: 1;
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  vertical-align: -0.05em;
+}
+
+.orgmode-view .cm-line.org-list-item {
+  line-height: 1.5;
+  padding-top: 1.2px;
+  padding-bottom: 1.2px;
+}
+
 .orgmode-view .org-checkbox {
   margin-right: 0.2em;
   vertical-align: middle;

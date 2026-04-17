@@ -15,7 +15,7 @@ import {
 import { syntaxTree } from "@codemirror/language";
 import { TOKEN } from 'codemirror-lang-orgmode';
 import { extractLinkFromNode, nodeTypeClass } from 'language-extensions';
-import { OrgmodePluginSettings } from "settings";
+import { OrgmodePluginSettings, BULLET_CHARS } from "settings";
 import { SyntaxNode } from "@lezer/common"
 import { CompletionContext, CompletionResult, autocompletion } from "@codemirror/autocomplete"
 
@@ -197,6 +197,23 @@ class TableWidget extends WidgetType {
   }
 }
 
+class BulletWidget extends WidgetType {
+  bulletChar: string
+  constructor(bulletChar: string) {
+    super()
+    this.bulletChar = bulletChar
+  }
+  eq(other: BulletWidget) {
+    return this.bulletChar === other.bulletChar
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const span = document.createElement("span")
+    span.className = "org-bullet"
+    span.textContent = this.bulletChar + " "
+    return span
+  }
+}
+
 class CheckboxWidget extends WidgetType {
   checked: string  // " ", "X", or "-"
   constructor(checked: string) {
@@ -361,6 +378,7 @@ const markupPatterns: [RegExp, string][] = [
 ]
 
 const linkPattern = /\[\[([^\]]+?)(?:\]\[([^\]]+?))?\]\]/g
+const plainUrlPattern = /\bhttps?:\/\/[^\s<>\])}]+/g
 
 function applyInlineMarkup(
   text: string,
@@ -368,6 +386,7 @@ function applyInlineMarkup(
   hideMarkers: boolean,
   startSide: number,
   builderBuffer: Array<Range<Decoration>>,
+  linkifyPlainUrls: boolean = false,
 ) {
   // Apply text markup patterns
   for (const [pattern, cssClass] of markupPatterns) {
@@ -404,6 +423,34 @@ function applyInlineMarkup(
       }
     } else {
       builderBuffer.push(buildRange(matchStart, matchEnd, Decoration.mark({class: "org-link"}), startSide))
+    }
+  }
+  // Apply plain URL linkification (gated by setting; skips URLs inside [[...]])
+  if (linkifyPlainUrls) {
+    const bracketedRanges: Array<[number, number]> = []
+    linkPattern.lastIndex = 0
+    let bm: RegExpExecArray | null
+    while ((bm = linkPattern.exec(text)) !== null) {
+      bracketedRanges.push([bm.index, bm.index + bm[0].length])
+    }
+    plainUrlPattern.lastIndex = 0
+    let um: RegExpExecArray | null
+    while ((um = plainUrlPattern.exec(text)) !== null) {
+      const start = um.index
+      const end = start + um[0].length
+      const inBracket = bracketedRanges.some(([bs, be]) => start >= bs && end <= be)
+      if (inBracket) continue
+      const url = um[0]
+      builderBuffer.push(buildRange(
+        baseFrom + start,
+        baseFrom + end,
+        Decoration.mark({
+          tagName: "a",
+          class: "org-link",
+          attributes: { href: "#", "data-plain-url": url },
+        }),
+        startSide,
+      ))
     }
   }
 }
@@ -514,6 +561,7 @@ function loadDecorations(
               !lineIsSelected,
               tokenStartSide(node.type.id),
               builderBuffer,
+              settings.linkifyPlainUrls,
             )
           }
         }
@@ -635,6 +683,15 @@ function loadDecorations(
                 tokenStartSide(node.type.id),
               )
             )
+          } else if (node.type.id === TOKEN.PlainLink && settings.linkifyPlainUrls) {
+            builderBuffer.push(
+              buildRange(
+                node.from,
+                node.to,
+                Decoration.mark({tagName: "a", attributes: { href: "#" }}),
+                tokenStartSide(node.type.id),
+              )
+            )
           }
         } else {
           builderBuffer.push(
@@ -699,7 +756,34 @@ function loadDecorations(
             tokenStartSide(node.type.id),
           )
         )
-        if (settings.hideStars && !nodeStarsIsSelected) {
+        if (settings.headingStyle === 'noStars' && !nodeStarsIsSelected) {
+          builderBuffer.push(
+            buildRange(
+              headingLine.from,
+              headingLine.from+headingLevel+1,
+              Decoration.replace({}),
+              tokenStartSide(node.type.id),
+            )
+          )
+        } else if (settings.headingStyle === 'hashmarks' && !nodeStarsIsSelected) {
+          builderBuffer.push(
+            buildRange(
+              headingLine.from,
+              headingLine.from+headingLevel,
+              Decoration.replace({
+                widget: new (class extends WidgetType {
+                  toDOM() {
+                    const span = document.createElement("span")
+                    span.textContent = "#".repeat(headingLevel)
+                    return span
+                  }
+                }),
+              }),
+              tokenStartSide(node.type.id),
+            )
+          )
+        } else if (settings.hideStars && !nodeStarsIsSelected) {
+          // Legacy hideStars support
           builderBuffer.push(
             buildRange(
               headingLine.from,
@@ -775,6 +859,41 @@ function loadDecorations(
       } else if (nodeIsOrgLang && node.type.id === TOKEN.ListItem) {
         const itemText = state.doc.sliceString(node.from, node.to)
         const line = state.doc.lineAt(node.from)
+        // Detect bullet type and indentation depth
+        const unorderedBulletMatch = itemText.match(/^(\s*)([-+]) /)
+        const orderedBulletMatch = itemText.match(/^(\s*)(\d+)([.)]) /)
+        const isUnordered = !!unorderedBulletMatch
+        // Calculate nesting depth from leading whitespace (every 2 spaces = 1 level)
+        const leadingSpaces = (unorderedBulletMatch || orderedBulletMatch)?.[1]?.length || 0
+        const nestDepth = Math.floor(leadingSpaces / 2)
+        // Replace unordered bullet with styled version
+        if (isUnordered && !nodeIsSelected && settings.bulletStyle !== 'dash') {
+          const bulletChars = BULLET_CHARS[settings.bulletStyle]
+          const bulletChar = bulletChars[nestDepth % bulletChars.length]
+          const bulletMarkerLen = unorderedBulletMatch[1].length + unorderedBulletMatch[2].length + 1 // indent + "- "
+          if (bulletChar === '') {
+            // 'none' style: hide bullet entirely
+            builderBuffer.push(
+              buildRange(
+                node.from + unorderedBulletMatch[1].length,
+                node.from + bulletMarkerLen,
+                Decoration.replace({}),
+                tokenStartSide(node.type.id),
+              )
+            )
+          } else {
+            builderBuffer.push(
+              buildRange(
+                node.from + unorderedBulletMatch[1].length,
+                node.from + bulletMarkerLen,
+                Decoration.replace({
+                  widget: new BulletWidget(bulletChar),
+                }),
+                tokenStartSide(node.type.id),
+              )
+            )
+          }
+        }
         // Detect checkbox pattern: bullet + space + [ ] or [X] or [-]
         const checkboxMatch = itemText.match(/^(\s*(?:[-+]|\d+[.)])\s+)\[([ X\-])\]\s/)
         if (checkboxMatch && !nodeIsSelected) {
@@ -807,6 +926,7 @@ function loadDecorations(
           !nodeIsSelected,
           tokenStartSide(node.type.id),
           builderBuffer,
+          settings.linkifyPlainUrls,
         )
       } else if (
         nodeIsOrgLang && (
@@ -949,29 +1069,45 @@ function orgLinkCompletions(
   context: CompletionContext,
   obsidianUtils: {
     getVaultFiles: () => string[][],
+    getLinkSuggestions?: () => Array<{ path?: string; alias?: string; file?: { path: string; basename: string; extension: string } }>,
   },
 ): CompletionResult {
-  const word = context.matchBefore(/\[\[$/)
-  if (!word) {
-    return null
-  }
-  const vaultFiles = obsidianUtils.getVaultFiles()
-  return {
-    from: word.to,
-    options: vaultFiles.map(([name, path]) => {
-      if (path === name) {
-        path = null;
-      } else {
-        path = path.substring(0, path.lastIndexOf("/")) + "/";
+  const word = context.matchBefore(/\[\[([^\]]*)$/)
+  if (!word) return null
+  const prefixEnd = word.from + 2
+  const partial = word.text.slice(2)
+  if (partial.startsWith("id:")) return null
+  const suggestions = obsidianUtils.getLinkSuggestions?.()
+  let options: Array<{ label: string; displayLabel: string; detail?: string; boost?: number }>
+  if (suggestions && suggestions.length) {
+    options = suggestions.map((s) => {
+      const f = s.file
+      const label = s.alias ?? (f ? (f.extension === "md" ? f.basename : f.path) : s.path || "")
+      const displayLabel = s.alias ?? (f ? f.basename : s.path || "")
+      const detail = s.alias && f ? f.path : (f ? (f.path !== f.basename ? f.path : undefined) : undefined)
+      return {
+        label: label + "]]",
+        displayLabel,
+        detail,
       }
+    })
+  } else {
+    const vaultFiles = obsidianUtils.getVaultFiles()
+    options = vaultFiles.map(([name, path]) => {
+      let detail: string | undefined = undefined
+      if (path !== name) detail = path.substring(0, path.lastIndexOf("/")) + "/"
       return {
         label: name + "]]",
         displayLabel: name,
-        detail: path,
-      };
-    }),
-    validFor: /[^\]]*/,
-  };
+        detail,
+      }
+    })
+  }
+  return {
+    from: prefixEnd,
+    options,
+    validFor: /^[^\]]*$/,
+  }
 }
 
 export const orgmodeLivePreview = (
@@ -982,8 +1118,11 @@ export const orgmodeLivePreview = (
     getImageUri: (linkPath: string) => string,
     navigateToOrgId: (orgCustomId: string) => void,
     getVaultFiles: () => string[][],
+    getLinkSuggestions?: () => Array<{ path?: string; alias?: string; file?: { path: string; basename: string; extension: string } }>,
     listOrgIds: () => Promise<string[][]>,
-    readFileContent: (filePath: string) => Promise<any>
+    readFileContent: (filePath: string) => Promise<any>,
+    triggerHoverLink?: (payload: { event: MouseEvent; linktext: string; targetEl: HTMLElement; sourcePath: string }) => void,
+    getSourcePath?: () => string,
 }) => {
   return StateField.define<DecorationSet>({
     create(state: EditorState): DecorationSet {
@@ -996,9 +1135,58 @@ export const orgmodeLivePreview = (
       return [
         EditorView.decorations.from(field),
         EditorView.domEventHandlers({
+          mouseover: (e: MouseEvent) => {
+            const target = e.target as HTMLElement
+            if (!target || target.nodeType !== 1) return
+            const anchor = target.closest("a") as HTMLAnchorElement | null
+            if (!anchor) return
+            const clickPos = codeMirror.posAtDOM(anchor)
+            if (clickPos == null) return
+            const state = codeMirror.state
+            let linktext: string | null = null
+            const decoSet = state.field(field)
+            decoSet.between(clickPos, clickPos + 1, (from, to, deco) => {
+              const plainUrl = deco.spec.attributes?.["data-plain-url"]
+              if (plainUrl) { linktext = plainUrl; return false }
+            })
+            if (!linktext) {
+              let nodeIterator = syntaxTree(state).resolveStack(clickPos)
+              while (nodeIterator) {
+                const nid = nodeIterator.node.type.id
+                if (nid === TOKEN.RegularLink || nid === TOKEN.AngleLink || nid === TOKEN.PlainLink) {
+                  const raw = state.doc.sliceString(nodeIterator.node.from, nodeIterator.node.to)
+                  const [linkPath] = extractLinkFromNode(nid, raw)
+                  if (linkPath) linktext = linkPath
+                  break
+                }
+                nodeIterator = nodeIterator.next
+              }
+            }
+            if (!linktext) return
+            obsidianUtils.triggerHoverLink?.({
+              event: e,
+              linktext,
+              targetEl: anchor,
+              sourcePath: obsidianUtils.getSourcePath?.() ?? "",
+            })
+          },
           mousedown: (e: MouseEvent) => {
             const clickPos = codeMirror.posAtCoords(e)
             const state = codeMirror.state
+            // First check for linkified plain URLs (synthetic anchors from applyInlineMarkup)
+            const orgmodeDecorationSetEarly = state.field(field)
+            let plainUrlHit: string | null = null
+            orgmodeDecorationSetEarly.between(clickPos, clickPos, (from, to, deco) => {
+              const url = deco.spec.attributes?.["data-plain-url"]
+              if (url) {
+                plainUrlHit = url
+                return false
+              }
+            })
+            if (plainUrlHit) {
+              window.open(plainUrlHit)
+              return
+            }
             let nodeIterator = syntaxTree(state).resolveStack(clickPos)
             let linkNode = null
             while (nodeIterator) {
