@@ -1,5 +1,6 @@
 import { foldService, syntaxTree } from "@codemirror/language"
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { SyntaxNode } from "@lezer/common"
 import { LRParser } from "@lezer/lr";
 
@@ -226,4 +227,120 @@ export function* iterateOrgIds(orgmodeParser: LRParser, orgContent: string) {
       yield {orgId: extracted_id, start: heading_start}
     }
   }
+}
+
+function isNumeric(s: string): boolean {
+  const trimmed = s.trim()
+  if (trimmed === '') return false
+  return /^-?\d+(\.\d+)?$/.test(trimmed)
+}
+
+function parseCells(line: string): string[] | null {
+  if (!line.startsWith('|')) return null
+  // Split by |, drop first empty element (before first |)
+  const parts = line.split('|')
+  if (parts.length < 3) return null  // need at least | cell |
+  // Remove first and last (empty from leading/trailing |)
+  return parts.slice(1, parts.length - 1)
+}
+
+function isHruleLine(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('|')) return false
+  return /^\|[-+| ]+\|?\s*$/.test(trimmed)
+}
+
+export function alignTable(view: EditorView): boolean {
+  const state = view.state
+  const cursorPos = state.selection.main.head
+  const cursorLine = state.doc.lineAt(cursorPos)
+
+  // Check if cursor is on a table line
+  const cursorLineText = cursorLine.text.trim()
+  if (!cursorLineText.startsWith('|')) return false
+
+  // Find the extent of the table (contiguous lines starting with |)
+  let startLine = cursorLine.number
+  let endLine = cursorLine.number
+  while (startLine > 1) {
+    const prevLine = state.doc.line(startLine - 1)
+    if (!prevLine.text.trim().startsWith('|')) break
+    startLine--
+  }
+  while (endLine < state.doc.lines) {
+    const nextLine = state.doc.line(endLine + 1)
+    if (!nextLine.text.trim().startsWith('|')) break
+    endLine++
+  }
+
+  // Parse all rows to find max column widths
+  const rows: { cells: string[], isHrule: boolean, lineNum: number }[] = []
+  let maxCols = 0
+  for (let i = startLine; i <= endLine; i++) {
+    const line = state.doc.line(i)
+    const text = line.text
+    const hrule = isHruleLine(text)
+    if (hrule) {
+      rows.push({ cells: [], isHrule: true, lineNum: i })
+    } else {
+      const cells = parseCells(text)
+      if (cells) {
+        rows.push({ cells, isHrule: false, lineNum: i })
+        maxCols = Math.max(maxCols, cells.length)
+      }
+    }
+  }
+
+  if (maxCols === 0) return false
+
+  // Calculate column widths and detect numeric columns
+  const colWidths: number[] = new Array(maxCols).fill(1)
+  const colNumeric: boolean[] = new Array(maxCols).fill(true)
+
+  for (const row of rows) {
+    if (row.isHrule) continue
+    for (let c = 0; c < row.cells.length; c++) {
+      const cellContent = row.cells[c].trim()
+      colWidths[c] = Math.max(colWidths[c], cellContent.length)
+      if (cellContent !== '' && !isNumeric(cellContent)) {
+        colNumeric[c] = false
+      }
+    }
+  }
+
+  // Build aligned table
+  const newLines: string[] = []
+  for (const row of rows) {
+    if (row.isHrule) {
+      const parts = colWidths.map(w => '-'.repeat(w + 2))
+      newLines.push('|' + parts.join('+') + '|')
+    } else {
+      const parts: string[] = []
+      for (let c = 0; c < maxCols; c++) {
+        const cellContent = (c < row.cells.length ? row.cells[c] : '').trim()
+        if (colNumeric[c]) {
+          // Right-align numbers
+          parts.push(' ' + cellContent.padStart(colWidths[c]) + ' ')
+        } else {
+          // Left-align text
+          parts.push(' ' + cellContent.padEnd(colWidths[c]) + ' ')
+        }
+      }
+      newLines.push('|' + parts.join('|') + '|')
+    }
+  }
+
+  const newText = newLines.join('\n')
+  const from = state.doc.line(startLine).from
+  const to = state.doc.line(endLine).to
+
+  // Only update if something changed
+  const oldText = state.doc.sliceString(from, to)
+  if (oldText === newText) return false
+
+  view.dispatch({
+    changes: { from, to, insert: newText },
+    selection: { anchor: Math.min(cursorPos, from + newText.length) }
+  })
+  return true
 }

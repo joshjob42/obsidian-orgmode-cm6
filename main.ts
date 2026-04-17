@@ -12,7 +12,7 @@ import { OrgmodeLanguage, OrgmodeParser } from 'codemirror-lang-orgmode';
 import { DEFAULT_SETTINGS, OrgmodePluginSettings } from 'settings';
 import { OrgmodeTask, StatusType } from 'org-tasks';
 import { OrgTasksSync } from 'org-tasks-file-sync';
-import { makeHeadingsFoldable, iterateOrgIds } from 'language-extensions';
+import { makeHeadingsFoldable, iterateOrgIds, alignTable } from 'language-extensions';
 import { orgmodeLivePreview } from "org-live-preview";
 import { Orgzly } from 'orgzly-search';
 import { ConditionValue, ConditionResolver, AgendaGroup, OrgzlyView } from 'orgzly-search';
@@ -303,7 +303,11 @@ class OrgView extends TextFileView {
         history(),
         // @ts-expect-error, not typed
         vimCompartment.of((this.app.vault.getConfig("vimMode")) ? vim() : []),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          { key: "Tab", run: alignTable },
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
         todoKeywordsReloader.of(OrgmodeLanguage(orgmodeParser)),
         EditorView.lineWrapping,
         makeHeadingsFoldable,

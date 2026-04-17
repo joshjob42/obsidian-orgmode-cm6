@@ -1,0 +1,144 @@
+* Orgdown1 Syntax Coverage Test
+
+This file tests all 43 Orgdown1 features.
+
+** Simple text formatting
+
+*bold text*
+/italic text/
+_underline text_
++strike through text+
+=code text=
+~commands text~
+*bold and /italic/ text*
+
+: This is a fixed-width example line
+: Another fixed-width line
+
+-----
+
+The line above is a horizontal rule (5+ dashes).
+
+----------
+
+Another horizontal rule with more dashes.
+
+** Headings
+
+All heading levels work. This is a level 2 heading.
+
+*** Level 3 heading
+
+**** Level 4 heading
+
+** Lists and Checkboxes
+
+simple list:
+- Org-mode
+- Lists
+- [ ] unchecked checkbox
+- [X] checked checkbox
+- [-] undecided checkbox
+
+enumerate:
+1. Emacs
+2. Org-mode
+3. Lists
+
+mixed with checkboxes:
+
+- Clean out garage
+  1. [ ] get stuff out
+     - [X] be careful with that axe, Eugene
+  2. [X] get rid of old stuff
+     - sell on the Internet?
+     - try to use rubbish as birthday presents for family
+  3. [ ] repaint garage
+  4. [ ] put stuff back in
+
+** Blocks
+
+#+BEGIN_EXAMPLE
+An example in an EXAMPLE block.
+Second line within this block.
+
+This *is* an /example/ of _some_ syntax +highlighting+.
+#+END_EXAMPLE
+
+#+BEGIN_QUOTE
+An example in an QUOTE block.
+Second line within this block.
+
+This *is* an /example/ of _some_ syntax +highlighting+.
+#+END_QUOTE
+
+#+BEGIN_VERSE
+An example in an VERSE block.
+Second line within this block.
+
+This *is* an /example/ of _some_ syntax +highlighting+.
+#+END_VERSE
+
+#+BEGIN_SRC python
+def my_test(myvar: str = 'foo bar'):
+    mynewvar: str = myvar + ' additional content'
+    return mynewvar
+#+END_SRC
+
+** Comments
+
+# This is a comment
+
+ # This is a comment
+
+  # This is a comment
+
+#+BEGIN_COMMENT
+This is a multi line comment block.
+This is the second line.
+#+END_COMMENT
+
+** Links
+
+- https://gitlab.com/publicvoit/orgdown
+- [[https://gitlab.com/publicvoit/orgdown]]
+- [[https://gitlab.com/publicvoit/orgdown][Orgdown homepage]]
+
+[[https://gitlab.com/publicvoit/orgdown][This *is* an /example/ of _some_ syntax +highlighting+ within =links= and ~such~.]]
+
+** Tables
+
+| *Heading1* | *head2* |
+|------------+---------|
+| entry      |      42 |
+| foo        |    21.7 |
+|------------+---------|
+| end        |   99.99 |
+
+Don't worry about alignment if you don't have proper tool support. This is a perfectly valid table:
+
+|*Heading1*|*head2*|
+|-+--|
+|entry|42|
+|foo|21.7|
+|-+-|
+|end|99.99|
+
+More columns:
+
+|     *When* | *What*                 | *USD* | *EUR* |
+|------------+------------------------+-------+-------|
+| 2012-02-03 | Taxi Graz-Airport      |       | 18.00 |
+| 2012-02-03 | Taxi Seattle Airport   | 25.00 | 19.12 |
+
+Formatting:
+
+| Example                                                 |
+|---------------------------------------------------------|
+| [[https://gitlab.com/publicvoit/orgdown][Orgdown]]                                                 |
+| This *is* an /example/ of _some_ syntax +highlighting+. |
+
+** The Rest
+
+All other syntax elements not defined here are interpreted as normal text.
+Their linebreaks should be respected.

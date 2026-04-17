@@ -579,12 +579,7 @@ function loadDecorations(
             tokenStartSide(node.type.id),
           )
         )
-      } else if (
-        nodeIsOrgLang && (
-          node.type.id === TOKEN.TableRow ||
-          node.type.id === TOKEN.TableHrule
-        )
-      ) {
+      } else if (nodeIsOrgLang && node.type.id === TOKEN.TableHrule) {
         const line = state.doc.lineAt(node.from)
         builderBuffer.push(
           buildRange(
@@ -594,6 +589,99 @@ function loadDecorations(
             tokenStartSide(node.type.id),
           )
         )
+      } else if (nodeIsOrgLang && node.type.id === TOKEN.TableRow) {
+        const line = state.doc.lineAt(node.from)
+        builderBuffer.push(
+          buildRange(
+            line.from,
+            line.from,
+            Decoration.line({class: nodeTypeClass(node.type.id)}),
+            tokenStartSide(node.type.id),
+          )
+        )
+        // Apply text formatting inside table cells
+        const rowText = state.doc.sliceString(node.from, node.to)
+        const markupPatterns: [RegExp, string][] = [
+          [/\*([^\s*](?:[^*]*[^\s*])?)\*/g, "org-text-bold"],
+          [/\/([^\s/](?:[^/]*[^\s/])?)\/(?=[^a-zA-Z0-9]|$)/g, "org-text-italic"],
+          [/_([^\s_](?:[^_]*[^\s_])?)_/g, "org-text-underline"],
+          [/\+([^\s+](?:[^+]*[^\s+])?)\+/g, "org-text-strikethrough"],
+          [/=([^\s=](?:[^=]*[^\s=])?)=/g, "org-text-verbatim"],
+          [/~([^\s~](?:[^~]*[^\s~])?)~/g, "org-text-code"],
+        ]
+        for (const [pattern, cssClass] of markupPatterns) {
+          let match: RegExpExecArray | null
+          pattern.lastIndex = 0
+          while ((match = pattern.exec(rowText)) !== null) {
+            const matchStart = node.from + match.index
+            const matchEnd = matchStart + match[0].length
+            if (!nodeIsSelected) {
+              // Hide opening marker
+              builderBuffer.push(
+                buildRange(
+                  matchStart,
+                  matchStart + 1,
+                  Decoration.replace({}),
+                  tokenStartSide(node.type.id),
+                )
+              )
+              // Hide closing marker
+              builderBuffer.push(
+                buildRange(
+                  matchEnd - 1,
+                  matchEnd,
+                  Decoration.replace({}),
+                  tokenStartSide(node.type.id),
+                )
+              )
+            }
+            builderBuffer.push(
+              buildRange(
+                matchStart,
+                matchEnd,
+                Decoration.mark({class: cssClass}),
+                tokenStartSide(node.type.id),
+              )
+            )
+          }
+        }
+        // Detect links inside table cells: [[url][desc]] or [[url]]
+        const linkPattern = /\[\[([^\]]+?)(?:\]\[([^\]]+?))?\]\]/g
+        let linkMatch: RegExpExecArray | null
+        while ((linkMatch = linkPattern.exec(rowText)) !== null) {
+          const matchStart = node.from + linkMatch.index
+          const matchEnd = matchStart + linkMatch[0].length
+          if (!nodeIsSelected) {
+            if (linkMatch[2]) {
+              // Has description: hide [[url][ and ]]
+              const descStart = matchStart + linkMatch[0].indexOf('][') + 2
+              builderBuffer.push(
+                buildRange(matchStart, descStart, Decoration.replace({}), tokenStartSide(node.type.id))
+              )
+              builderBuffer.push(
+                buildRange(descStart, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), tokenStartSide(node.type.id))
+              )
+              builderBuffer.push(
+                buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), tokenStartSide(node.type.id))
+              )
+            } else {
+              // No description: hide [[ and ]]
+              builderBuffer.push(
+                buildRange(matchStart, matchStart + 2, Decoration.replace({}), tokenStartSide(node.type.id))
+              )
+              builderBuffer.push(
+                buildRange(matchStart + 2, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), tokenStartSide(node.type.id))
+              )
+              builderBuffer.push(
+                buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), tokenStartSide(node.type.id))
+              )
+            }
+          } else {
+            builderBuffer.push(
+              buildRange(matchStart, matchEnd, Decoration.mark({class: "org-link"}), tokenStartSide(node.type.id))
+            )
+          }
+        }
       } else if (nodeIsOrgLang && node.type.id === TOKEN.FixedWidthLine) {
         const line = state.doc.lineAt(node.from)
         builderBuffer.push(
