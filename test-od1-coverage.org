@@ -45,6 +45,14 @@ enumerate:
 2. Org-mode
 3. Lists
 
+multi-line list items (should be foldable):
+- This is a list item that spans
+  multiple lines. The continuation is
+  indented past the bullet.
+- This is a single-line item.
+1. Ordered items can also span
+   multiple lines like this.
+
 mixed with checkboxes:
 
 - Clean out garage

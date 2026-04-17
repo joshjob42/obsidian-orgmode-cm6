@@ -462,17 +462,68 @@ export const block_tokenizer = new ExternalTokenizer((input, stack) => {
       input.acceptToken(FixedWidthLine)
       return
     }
-    // Check for ListItem
+    // Check for ListItem (multi-line: consumes continuation lines)
     if (checkListItem(input, stack)) {
       let li_peek = 0
       let c = input.peek(li_peek)
-      // Consume to end of line
-      while (!isEndOfLine(c)) {
-        li_peek += 1
-        c = input.peek(li_peek)
+      // Determine content indent level (past bullet + space)
+      let contentIndent = 0
+      while (isWhiteSpace(input.peek(contentIndent))) {
+        contentIndent++
       }
-      if (c === NEW_LINE) {
-        li_peek += 1
+      // Skip past bullet marker to find where content starts
+      let bulletEnd = contentIndent
+      c = input.peek(bulletEnd)
+      if (c === DASH || c === '+'.charCodeAt(0)) {
+        bulletEnd += 2  // "- " or "+ "
+      } else {
+        // ordered: skip digits then . or ) then space
+        while (c >= '0'.charCodeAt(0) && c <= '9'.charCodeAt(0)) {
+          bulletEnd++
+          c = input.peek(bulletEnd)
+        }
+        bulletEnd += 2  // ". " or ") "
+      }
+      // Consume first line
+      while (!isEndOfLine(input.peek(li_peek))) {
+        li_peek++
+      }
+      if (input.peek(li_peek) === NEW_LINE) {
+        li_peek++
+      }
+      // Consume continuation lines: indented at least to bulletEnd, not a new list item or blank
+      while (true) {
+        c = input.peek(li_peek)
+        if (isEndOfLine(c)) break  // blank line or EOF ends the item
+        // Count leading whitespace of this line
+        let lineIndent = 0
+        while (isWhiteSpace(input.peek(li_peek + lineIndent))) {
+          lineIndent++
+        }
+        if (lineIndent < bulletEnd) break  // less indented = not a continuation
+        // Check if this continuation line is itself a new list item
+        let contPeek = li_peek + lineIndent
+        let contC = input.peek(contPeek)
+        if ((contC === DASH || contC === '+'.charCodeAt(0)) && isWhiteSpace(input.peek(contPeek + 1))) {
+          break  // new sub-list item at same or deeper indent handled separately
+        }
+        if (contC >= '0'.charCodeAt(0) && contC <= '9'.charCodeAt(0)) {
+          let numPeek = contPeek
+          while (input.peek(numPeek) >= '0'.charCodeAt(0) && input.peek(numPeek) <= '9'.charCodeAt(0)) {
+            numPeek++
+          }
+          let afterNum = input.peek(numPeek)
+          if ((afterNum === '.'.charCodeAt(0) || afterNum === ')'.charCodeAt(0)) && isWhiteSpace(input.peek(numPeek + 1))) {
+            break  // new ordered list item
+          }
+        }
+        // Consume this continuation line
+        while (!isEndOfLine(input.peek(li_peek))) {
+          li_peek++
+        }
+        if (input.peek(li_peek) === NEW_LINE) {
+          li_peek++
+        }
       }
       input.advance(li_peek)
       log(`== ACCEPT ListItem ${inputStreamAccept(input, stack)}`)

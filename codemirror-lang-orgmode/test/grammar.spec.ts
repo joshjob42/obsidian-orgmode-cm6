@@ -1338,6 +1338,26 @@ test("table with multiple columns", () => {
   testTree(tree, spec)
 })
 
+test("multi-line list item", () => {
+  const content = [
+    "- first item spans",
+    "  across two lines",
+    "- second item",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
 test("colon without space is not fixed-width", () => {
   const content = ":not-fixed-width"
   const tree = parser.parse(content)

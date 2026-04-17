@@ -1,4 +1,4 @@
-import { foldService, syntaxTree } from "@codemirror/language"
+import { foldService, syntaxTree, foldCode, unfoldCode } from "@codemirror/language"
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { SyntaxNode } from "@lezer/common"
@@ -104,6 +104,21 @@ export const OrgFoldCompute = (state: EditorState, from: number, to: number) => 
       block_to = block_to - 1
     }
     return { from: to, to: block_to };
+  } else if (currentLineNode.type.id === TOKEN.ListItem) {
+    if (!onFirstLine) {
+      return null
+    }
+    const listItem = currentLineNode
+    // Only fold if the list item spans multiple lines
+    const firstLine = state.doc.lineAt(listItem.from)
+    let item_to = listItem.to
+    if (state.doc.sliceString(item_to-1, item_to) === '\n') {
+      item_to = item_to - 1
+    }
+    if (item_to <= firstLine.to) {
+      return null  // single-line item, nothing to fold
+    }
+    return { from: firstLine.to, to: item_to };
   }
   return null
 }
@@ -343,4 +358,135 @@ export function alignTable(view: EditorView): boolean {
     selection: { anchor: Math.min(cursorPos, from + newText.length) }
   })
   return true
+}
+
+export function listIndent(view: EditorView): boolean {
+  const state = view.state
+  const cursorPos = state.selection.main.head
+  const line = state.doc.lineAt(cursorPos)
+  const lineText = line.text
+  if (!lineText.match(/^\s*(?:[-+]|\d+[.)])\s/)) return false
+  // Add 2 spaces of indentation
+  view.dispatch({
+    changes: { from: line.from, to: line.from, insert: "  " },
+    selection: { anchor: cursorPos + 2 },
+  })
+  return true
+}
+
+export function listDedent(view: EditorView): boolean {
+  const state = view.state
+  const cursorPos = state.selection.main.head
+  const line = state.doc.lineAt(cursorPos)
+  const lineText = line.text
+  if (!lineText.match(/^\s*(?:[-+]|\d+[.)])\s/)) return false
+  // Remove up to 2 spaces of leading indentation
+  let removeCount = 0
+  if (lineText.startsWith("  ")) removeCount = 2
+  else if (lineText.startsWith(" ")) removeCount = 1
+  if (removeCount === 0) return false
+  view.dispatch({
+    changes: { from: line.from, to: line.from + removeCount },
+    selection: { anchor: Math.max(line.from, cursorPos - removeCount) },
+  })
+  return true
+}
+
+export function listContinueLine(view: EditorView): boolean {
+  const state = view.state
+  const cursorPos = state.selection.main.head
+  const line = state.doc.lineAt(cursorPos)
+
+  // Search current line and upward to find the bullet line
+  let contentIndent = 0
+  let found = false
+  for (let lineNum = line.number; lineNum >= 1; lineNum--) {
+    const searchLine = state.doc.line(lineNum)
+    const searchText = searchLine.text
+    const unorderedMatch = searchText.match(/^(\s*)([-+]) /)
+    const orderedMatch = searchText.match(/^(\s*)(\d+)([.)]) /)
+    if (unorderedMatch) {
+      contentIndent = unorderedMatch[1].length + unorderedMatch[2].length + 1
+      found = true
+      break
+    } else if (orderedMatch) {
+      contentIndent = orderedMatch[1].length + orderedMatch[2].length + orderedMatch[3].length + 1
+      found = true
+      break
+    } else if (searchText.trim() === '' || !searchText.match(/^\s/)) {
+      // Blank line or non-indented line = not in a list item
+      break
+    }
+  }
+
+  if (!found) return false
+
+  const padding = " ".repeat(contentIndent)
+  view.dispatch({
+    changes: { from: cursorPos, to: cursorPos, insert: "\n" + padding },
+    selection: { anchor: cursorPos + 1 + contentIndent },
+  })
+  return true
+}
+
+export function toggleFoldAtCursor(view: EditorView): boolean {
+  // Try to unfold first; if nothing to unfold, try to fold
+  if (unfoldCode(view)) return true
+  if (foldCode(view)) return true
+  return false
+}
+
+export function listAutoIndent(view: EditorView): boolean {
+  const state = view.state
+  const cursorPos = state.selection.main.head
+  const line = state.doc.lineAt(cursorPos)
+  const lineText = line.text
+
+  // Check if current line is a list item
+  const unorderedMatch = lineText.match(/^(\s*)([-+])\s/)
+  const orderedMatch = lineText.match(/^(\s*)(\d+)([.)]) /)
+  const checkboxMatch = lineText.match(/^(\s*)([-+])\s+\[[ X\-]\]\s/)
+
+  if (!unorderedMatch && !orderedMatch) {
+    return false  // not in a list item
+  }
+
+  if (unorderedMatch) {
+    const indent = unorderedMatch[1]
+    const bullet = unorderedMatch[2]
+    // If line is empty list item (just bullet), remove it
+    if (lineText.trim() === bullet || lineText.trim() === `${bullet} [ ]` || lineText.trim() === `${bullet} [X]` || lineText.trim() === `${bullet} [-]`) {
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: "" },
+      })
+      return true
+    }
+    const newBullet = checkboxMatch ? `${indent}${bullet} [ ] ` : `${indent}${bullet} `
+    view.dispatch({
+      changes: { from: cursorPos, to: cursorPos, insert: "\n" + newBullet },
+      selection: { anchor: cursorPos + 1 + newBullet.length },
+    })
+    return true
+  }
+
+  if (orderedMatch) {
+    const indent = orderedMatch[1]
+    const num = parseInt(orderedMatch[2])
+    const sep = orderedMatch[3]
+    // If line is empty ordered item (just number), remove it
+    if (lineText.trim() === `${num}${sep}`) {
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: "" },
+      })
+      return true
+    }
+    const newBullet = `${indent}${num + 1}${sep} `
+    view.dispatch({
+      changes: { from: cursorPos, to: cursorPos, insert: "\n" + newBullet },
+      selection: { anchor: cursorPos + 1 + newBullet.length },
+    })
+    return true
+  }
+
+  return false
 }
