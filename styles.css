@@ -5,8 +5,46 @@
   font-family: var(--font-text);
 }
 
-.cm-line:has(.org-heading) {
-  font-size: 1.05em;
+/* Heading sizes matching Obsidian's markdown heading scale */
+.orgmode-view .cm-line.org-heading-1,
+.orgmode-view .cm-line:has(.org-heading-1) {
+  font-size: var(--h1-size, 2em) !important;
+  font-weight: var(--h1-weight, 700) !important;
+  line-height: var(--h1-line-height, 1.2);
+}
+.orgmode-view .cm-line.org-heading-2,
+.orgmode-view .cm-line:has(.org-heading-2) {
+  font-size: var(--h2-size, 1.6em) !important;
+  font-weight: var(--h2-weight, 600) !important;
+  line-height: var(--h2-line-height, 1.2);
+}
+.orgmode-view .cm-line.org-heading-3,
+.orgmode-view .cm-line:has(.org-heading-3) {
+  font-size: var(--h3-size, 1.37em) !important;
+  font-weight: var(--h3-weight, 600) !important;
+  line-height: var(--h3-line-height, 1.3);
+}
+.orgmode-view .cm-line.org-heading-4,
+.orgmode-view .cm-line:has(.org-heading-4) {
+  font-size: var(--h4-size, 1.15em) !important;
+  font-weight: var(--h4-weight, 600) !important;
+  line-height: var(--h4-line-height, 1.4);
+}
+.orgmode-view .cm-line.org-heading-5,
+.orgmode-view .cm-line:has(.org-heading-5) {
+  font-size: var(--h5-size, 1em) !important;
+  font-weight: var(--h5-weight, 600) !important;
+}
+.orgmode-view .cm-line.org-heading-6,
+.orgmode-view .cm-line:has(.org-heading-6) {
+  font-size: var(--h6-size, 1em) !important;
+  font-weight: var(--h6-weight, 600) !important;
+  font-style: italic;
+}
+
+/* Heading text color */
+.orgmode-view .org-heading {
+  color: var(--h1-color, var(--text-accent));
 }
 
 .cm-line:has(.org-planning),
@@ -14,113 +52,79 @@
   font-size: 0.95em;
 }
 
-.theme-dark .org-heading,
-.theme-dark .cm-line:has(.org-heading) > .org-section {
-  color: #2fbd23;
+/* Text formatting — theme-independent, scoped to orgmode-view */
+.orgmode-view .org-text-bold {
+  font-weight: 700;
+}
+.orgmode-view .org-text-italic {
+  font-style: italic;
+}
+.orgmode-view .org-text-underline {
+  text-decoration: underline !important;
+}
+.orgmode-view .org-text-verbatim {
+  font-family: var(--font-monospace);
+  font-size: var(--code-size, 0.9em);
+  background-color: var(--code-background);
+  padding: 1px 4px;
+  border-radius: var(--radius-s, 4px);
+  color: var(--code-normal, inherit);
+}
+.orgmode-view .org-text-code {
+  font-family: var(--font-monospace);
+  font-size: var(--code-size, 0.9em);
+  background-color: var(--code-background);
+  padding: 1px 4px;
+  border-radius: var(--radius-s, 4px);
+  color: var(--code-normal, inherit);
+}
+.orgmode-view .org-text-strikethrough {
+  text-decoration: line-through !important;
+  text-decoration-color: var(--text-normal) !important;
 }
 
 .theme-dark .org-planning {
   color: #bb8210;
 }
-
 .theme-dark .org-propertydrawer {
   color: #aa944f;
 }
-
 .theme-dark .org-section {
   color: #b9cddb;
 }
-
 .theme-dark .org-comment {
   color: #a68fa7;
 }
-
 .theme-dark .org-keyword {
   color: #bb0f0f;
 }
-
 .theme-dark .org-priority {
   color: #058fc7;
 }
-
 .theme-dark .org-tags {
   color: #02ffc7;
-}
-
-.theme-dark .org-text-bold {
-  font-weight: 600;
-}
-.theme-dark .org-text-italic {
-  font-style: italic;
-}
-.theme-dark .org-text-underline {
-  text-decoration: underline;
-}
-.theme-dark .org-text-verbatim {
-  background-color: black;
-}
-.theme-dark .org-text-code {
-  background-color: black;
-}
-.theme-dark .org-text-strikethrough {
-  text-decoration: line-through;
-}
-
-
-
-
-
-
-.theme-light .org-heading,
-.theme-light .cm-line:has(.org-heading) > .org-section {
-  color: #2f8925;
 }
 
 .theme-light .org-planning {
   color: #895f0a;
 }
-
 .theme-light .org-propertydrawer {
   color: #705f2c;
 }
-
 .theme-light .org-section {
   color: rgb(58, 69, 74);
 }
-
 .theme-light .org-comment {
   color: #a68fa7;
 }
-
 .theme-light .org-keyword {
   color: #931212;
 }
-
 .theme-light .org-priority {
   color: #197aa0;
 }
-
 .theme-light .org-tags {
   color: #1d9077;
-}
-
-.theme-light .org-text-bold {
-  font-weight: 600;
-}
-.theme-light .org-text-italic {
-  font-style: italic;
-}
-.theme-light .org-text-underline {
-  text-decoration: underline;
-}
-.theme-light .org-text-verbatim {
-  background-color: white;
-}
-.theme-light .org-text-code {
-  background-color: white;
-}
-.theme-light .org-text-strikethrough {
-  text-decoration: line-through;
 }
 
 
@@ -185,6 +189,7 @@
 .orgmode-view .org-fixed-width {
   font-family: var(--font-monospace);
   background-color: var(--code-background);
+  padding: 2px 4px;
 }
 
 .orgmode-view .org-checkbox {
@@ -192,19 +197,33 @@
   vertical-align: middle;
 }
 
+/* Table widget rendering */
+.orgmode-view .org-table-widget {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  width: auto;
+}
+.orgmode-view .org-table-widget td,
+.orgmode-view .org-table-widget th {
+  border: 1px solid var(--table-border-color, var(--background-modifier-border));
+  padding: 4px 10px;
+  text-align: left;
+}
+.orgmode-view .org-table-widget th {
+  font-weight: 700;
+  background-color: var(--table-header-background, var(--background-secondary));
+}
+.orgmode-view .org-table-widget td.org-table-cell-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep raw table lines styled for when cursor is on them */
 .orgmode-view .org-table-row,
 .orgmode-view .org-table-hrule {
   font-family: var(--font-monospace);
-}
-
-.theme-dark .orgmode-view .org-table-row,
-.theme-dark .orgmode-view .org-table-hrule {
-  color: #b9cddb;
-}
-
-.theme-light .orgmode-view .org-table-row,
-.theme-light .orgmode-view .org-table-hrule {
-  color: rgb(58, 69, 74);
+  font-size: 0.9em;
+  color: var(--text-muted);
 }
 
 .theme-dark .orgmode-view .org-block {
@@ -226,7 +245,7 @@
 }
 
 .orgmode-view .org-block-header-dynamic::before {
-  content: "λ";
+  content: "\03BB";
 }
 
 .orgmode-view .org-block-dynamic-content {
@@ -300,9 +319,8 @@
   margin-right: 0.2em;
 }
 .block-language-orgmode-tasks .org-agenda-item-date-scheduled::before {
-  content: "🗓️";
+  content: "\01F5D3\FE0F";
 }
 .block-language-orgmode-tasks .org-agenda-item-date-deadline::before {
-  content: "⏰";
+  content: "\23F0";
 }
-

@@ -42,6 +42,99 @@ class ImageWidget extends WidgetType {
   }
 }
 
+class TableWidget extends WidgetType {
+  tableText: string
+  constructor(tableText: string) {
+    super()
+    this.tableText = tableText
+  }
+  eq(other: TableWidget) {
+    return this.tableText === other.tableText
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const table = document.createElement("table");
+    table.className = "org-table-widget"
+
+    const lines = this.tableText.split('\n').filter(l => l.trim().length > 0)
+    const isHrule = (line: string) => /^\s*\|[-+| ]+\|?\s*$/.test(line)
+
+    // Parse all data rows to detect numeric columns
+    const dataRows: string[][] = []
+    for (const line of lines) {
+      if (isHrule(line)) continue
+      const cells = line.split('|').slice(1)
+      // Remove trailing empty element from final |
+      if (cells.length > 0 && cells[cells.length - 1].trim() === '') {
+        cells.pop()
+      }
+      dataRows.push(cells.map(c => c.trim()))
+    }
+
+    const maxCols = Math.max(...dataRows.map(r => r.length), 0)
+    const colNumeric: boolean[] = new Array(maxCols).fill(true)
+    for (const row of dataRows) {
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] !== '' && !/^-?\d+(\.\d+)?$/.test(row[c])) {
+          colNumeric[c] = false
+        }
+      }
+    }
+
+    // First data row before any hrule is the header
+    let foundHrule = false
+    let isFirstRow = true
+    for (const line of lines) {
+      if (isHrule(line)) {
+        foundHrule = true
+        continue
+      }
+      const cells = line.split('|').slice(1)
+      if (cells.length > 0 && cells[cells.length - 1].trim() === '') {
+        cells.pop()
+      }
+
+      const tr = document.createElement("tr")
+      const useHeader = isFirstRow && !foundHrule
+      // If first hrule comes right after first row, treat first row as header
+      const isHeader = isFirstRow && lines.length > 1 && isHrule(lines[1])
+
+      for (let c = 0; c < cells.length; c++) {
+        const cellContent = cells[c].trim()
+        const cellEl = document.createElement(isHeader ? "th" : "td")
+        if (colNumeric[c] && !isHeader) {
+          cellEl.className = "org-table-cell-numeric"
+        }
+        // Apply inline markup rendering
+        cellEl.innerHTML = this.renderCellMarkup(cellContent)
+        tr.appendChild(cellEl)
+      }
+      table.appendChild(tr)
+      isFirstRow = false
+    }
+
+    return table
+  }
+
+  private renderCellMarkup(text: string): string {
+    // Links: [[url][desc]] → desc as link, [[url]] → url as link
+    text = text.replace(/\[\[([^\]]+?)\]\[([^\]]+?)\]\]/g, '<a href="#">$2</a>')
+    text = text.replace(/\[\[([^\]]+?)\]\]/g, '<a href="#">$1</a>')
+    // Bold
+    text = text.replace(/\*([^\s*](?:[^*]*[^\s*])?)\*/g, '<strong>$1</strong>')
+    // Italic
+    text = text.replace(/\/([^\s/](?:[^/]*[^\s/])?)\//g, '<em>$1</em>')
+    // Underline
+    text = text.replace(/_([^\s_](?:[^_]*[^\s_])?)_/g, '<u>$1</u>')
+    // Strikethrough
+    text = text.replace(/\+([^\s+](?:[^+]*[^\s+])?)\+/g, '<s>$1</s>')
+    // Code
+    text = text.replace(/=([^\s=](?:[^=]*[^\s=])?)=/g, '<code>$1</code>')
+    // Verbatim/commands
+    text = text.replace(/~([^\s~](?:[^~]*[^\s~])?)~/g, '<code>$1</code>')
+    return text
+  }
+}
+
 class CheckboxWidget extends WidgetType {
   checked: string  // " ", "X", or "-"
   constructor(checked: string) {
@@ -196,6 +289,63 @@ function isNodeSelected(selection: {from: number, to: number}, node: {from: numb
       (selection.from < node.from && selection.to > node.to))
 }
 
+const markupPatterns: [RegExp, string][] = [
+  [/\*([^\s*](?:[^*]*[^\s*])?)\*/g, "org-text-bold"],
+  [/\/([^\s/](?:[^/]*[^\s/])?)\/(?=[^a-zA-Z0-9]|$)/g, "org-text-italic"],
+  [/_([^\s_](?:[^_]*[^\s_])?)_/g, "org-text-underline"],
+  [/\+([^\s+](?:[^+]*[^\s+])?)\+/g, "org-text-strikethrough"],
+  [/=([^\s=](?:[^=]*[^\s=])?)=/g, "org-text-verbatim"],
+  [/~([^\s~](?:[^~]*[^\s~])?)~/g, "org-text-code"],
+]
+
+const linkPattern = /\[\[([^\]]+?)(?:\]\[([^\]]+?))?\]\]/g
+
+function applyInlineMarkup(
+  text: string,
+  baseFrom: number,
+  hideMarkers: boolean,
+  startSide: number,
+  builderBuffer: Array<Range<Decoration>>,
+) {
+  // Apply text markup patterns
+  for (const [pattern, cssClass] of markupPatterns) {
+    pattern.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(text)) !== null) {
+      const matchStart = baseFrom + match.index
+      const matchEnd = matchStart + match[0].length
+      if (hideMarkers) {
+        builderBuffer.push(buildRange(matchStart, matchStart + 1, Decoration.replace({}), startSide))
+        builderBuffer.push(buildRange(matchEnd - 1, matchEnd, Decoration.replace({}), startSide))
+      }
+      builderBuffer.push(buildRange(matchStart, matchEnd, Decoration.mark({class: cssClass}), startSide))
+    }
+  }
+  // Apply link patterns
+  linkPattern.lastIndex = 0
+  let linkMatch: RegExpExecArray | null
+  while ((linkMatch = linkPattern.exec(text)) !== null) {
+    const matchStart = baseFrom + linkMatch.index
+    const matchEnd = matchStart + linkMatch[0].length
+    if (hideMarkers) {
+      if (linkMatch[2]) {
+        // [[url][desc]] — hide [[url][ and ]]
+        const descStart = matchStart + linkMatch[0].indexOf('][') + 2
+        builderBuffer.push(buildRange(matchStart, descStart, Decoration.replace({}), startSide))
+        builderBuffer.push(buildRange(descStart, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), startSide))
+        builderBuffer.push(buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), startSide))
+      } else {
+        // [[url]] — hide [[ and ]]
+        builderBuffer.push(buildRange(matchStart, matchStart + 2, Decoration.replace({}), startSide))
+        builderBuffer.push(buildRange(matchStart + 2, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), startSide))
+        builderBuffer.push(buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), startSide))
+      }
+    } else {
+      builderBuffer.push(buildRange(matchStart, matchEnd, Decoration.mark({class: "org-link"}), startSide))
+    }
+  }
+}
+
 function loadDecorations(
   state: EditorState,
   settings: OrgmodePluginSettings,
@@ -286,6 +436,24 @@ function loadDecorations(
               tokenStartSide(node.type.id),
             )
           )
+        }
+        // Apply inline markup inside QUOTE and VERSE blocks
+        const blockType = blockFirstLine.toUpperCase()
+        const isFormattedBlock = blockType.startsWith("#+BEGIN_QUOTE") || blockType.startsWith("#+BEGIN_VERSE")
+        if (isFormattedBlock) {
+          // Apply markup to content lines (between first and last line)
+          for (let i = firstLine.number + 1; i < lastLine.number; ++i) {
+            const contentLine = state.doc.line(i)
+            const lineIsSelected = isNodeSelected(selectionPos, contentLine)
+            const lineText = state.doc.sliceString(contentLine.from, contentLine.to)
+            applyInlineMarkup(
+              lineText,
+              contentLine.from,
+              !lineIsSelected,
+              tokenStartSide(node.type.id),
+              builderBuffer,
+            )
+          }
         }
       } else if (
         nodeIsOrgLang && (
@@ -460,6 +628,15 @@ function loadDecorations(
         const headingClass = nodeTypeClass(node.type.id)
         const starsPos = {from: headingLine.from, to: headingLine.from+headingLevel+1}
         const nodeStarsIsSelected = isNodeSelected(selectionPos, starsPos)
+        // Line-level decoration for font-size
+        builderBuffer.push(
+          buildRange(
+            headingLine.from,
+            headingLine.from,
+            Decoration.line({class: `${headingClass} ${headingClass}-${headingLevel}`}),
+            tokenStartSide(node.type.id),
+          )
+        )
         if (settings.hideStars && !nodeStarsIsSelected) {
           builderBuffer.push(
             buildRange(
@@ -469,37 +646,19 @@ function loadDecorations(
               tokenStartSide(node.type.id),
             )
           )
-          builderBuffer.push(
-            buildRange(
-              headingLine.from,
-              headingLine.to,
-              Decoration.mark({class: `${headingClass} ${headingClass}-${headingLevel}`}),
-              tokenStartSide(node.type.id),
-            )
-          )
-        } else {
-          builderBuffer.push(
-            buildRange(
-              headingLine.from,
-              headingLine.to,
-              Decoration.mark({
-                class: `${headingClass} ${headingClass}-${headingLevel}`
-              }),
-              tokenStartSide(node.type.id),
-            )
-          )
         }
-        const section = node.node.getChild(TOKEN.Section)
-        if (section) {
-          builderBuffer.push(
-            buildRange(
-              section.from,
-              section.to,
-              Decoration.mark({class: `${headingClass}-${headingLevel}`}),
-              tokenStartSide(node.type.id),
-            )
+        builderBuffer.push(
+          buildRange(
+            headingLine.from,
+            headingLine.to,
+            Decoration.mark({
+              class: `${headingClass} ${headingClass}-${headingLevel}`
+            }),
+            tokenStartSide(node.type.id),
           )
-        }
+        )
+        // Note: We intentionally do NOT apply heading-level classes to section content
+        // as that would make all body text inherit heading font-weight/size
       } else if (
         nodeIsOrgLang && (
           node.type.id === TOKEN.Title ||
@@ -579,108 +738,99 @@ function loadDecorations(
             tokenStartSide(node.type.id),
           )
         )
-      } else if (nodeIsOrgLang && node.type.id === TOKEN.TableHrule) {
-        const line = state.doc.lineAt(node.from)
-        builderBuffer.push(
-          buildRange(
-            line.from,
-            line.from,
-            Decoration.line({class: nodeTypeClass(node.type.id)}),
-            tokenStartSide(node.type.id),
-          )
+        // Apply inline markup and links inside list items
+        applyInlineMarkup(
+          itemText,
+          node.from,
+          !nodeIsSelected,
+          tokenStartSide(node.type.id),
+          builderBuffer,
         )
-      } else if (nodeIsOrgLang && node.type.id === TOKEN.TableRow) {
-        const line = state.doc.lineAt(node.from)
-        builderBuffer.push(
-          buildRange(
-            line.from,
-            line.from,
-            Decoration.line({class: nodeTypeClass(node.type.id)}),
-            tokenStartSide(node.type.id),
-          )
+      } else if (
+        nodeIsOrgLang && (
+          node.type.id === TOKEN.TableRow ||
+          node.type.id === TOKEN.TableHrule
         )
-        // Apply text formatting inside table cells
-        const rowText = state.doc.sliceString(node.from, node.to)
-        const markupPatterns: [RegExp, string][] = [
-          [/\*([^\s*](?:[^*]*[^\s*])?)\*/g, "org-text-bold"],
-          [/\/([^\s/](?:[^/]*[^\s/])?)\/(?=[^a-zA-Z0-9]|$)/g, "org-text-italic"],
-          [/_([^\s_](?:[^_]*[^\s_])?)_/g, "org-text-underline"],
-          [/\+([^\s+](?:[^+]*[^\s+])?)\+/g, "org-text-strikethrough"],
-          [/=([^\s=](?:[^=]*[^\s=])?)=/g, "org-text-verbatim"],
-          [/~([^\s~](?:[^~]*[^\s~])?)~/g, "org-text-code"],
-        ]
-        for (const [pattern, cssClass] of markupPatterns) {
-          let match: RegExpExecArray | null
-          pattern.lastIndex = 0
-          while ((match = pattern.exec(rowText)) !== null) {
-            const matchStart = node.from + match.index
-            const matchEnd = matchStart + match[0].length
-            if (!nodeIsSelected) {
-              // Hide opening marker
-              builderBuffer.push(
-                buildRange(
-                  matchStart,
-                  matchStart + 1,
-                  Decoration.replace({}),
-                  tokenStartSide(node.type.id),
-                )
-              )
-              // Hide closing marker
-              builderBuffer.push(
-                buildRange(
-                  matchEnd - 1,
-                  matchEnd,
-                  Decoration.replace({}),
-                  tokenStartSide(node.type.id),
-                )
-              )
+      ) {
+        // Collect this table node for grouped rendering
+        // We track table groups and render them after the tree walk
+        const line = state.doc.lineAt(node.from)
+        if (!nodeIsSelected) {
+          // Check if this is the first row of a contiguous table
+          const prevLineNum = line.number - 1
+          let isFirstTableLine = true
+          if (prevLineNum >= 1) {
+            const prevLine = state.doc.line(prevLineNum)
+            if (prevLine.text.trim().startsWith('|')) {
+              isFirstTableLine = false
             }
-            builderBuffer.push(
-              buildRange(
-                matchStart,
-                matchEnd,
-                Decoration.mark({class: cssClass}),
-                tokenStartSide(node.type.id),
-              )
-            )
           }
-        }
-        // Detect links inside table cells: [[url][desc]] or [[url]]
-        const linkPattern = /\[\[([^\]]+?)(?:\]\[([^\]]+?))?\]\]/g
-        let linkMatch: RegExpExecArray | null
-        while ((linkMatch = linkPattern.exec(rowText)) !== null) {
-          const matchStart = node.from + linkMatch.index
-          const matchEnd = matchStart + linkMatch[0].length
-          if (!nodeIsSelected) {
-            if (linkMatch[2]) {
-              // Has description: hide [[url][ and ]]
-              const descStart = matchStart + linkMatch[0].indexOf('][') + 2
+
+          if (isFirstTableLine) {
+            // Collect all consecutive table lines
+            let endLineNum = line.number
+            while (endLineNum < state.doc.lines) {
+              const nextLine = state.doc.line(endLineNum + 1)
+              if (!nextLine.text.trim().startsWith('|')) break
+              endLineNum++
+            }
+            const tableFrom = line.from
+            let tableTo = state.doc.line(endLineNum).to
+            const tableText = state.doc.sliceString(tableFrom, tableTo)
+
+            // Check if ANY line in the table is selected
+            let tableIsSelected = false
+            for (let i = line.number; i <= endLineNum; i++) {
+              const tl = state.doc.line(i)
+              if (isNodeSelected(selectionPos, tl)) {
+                tableIsSelected = true
+                break
+              }
+            }
+
+            if (!tableIsSelected) {
+              // Replace entire table with a widget
+              // Handle trailing newline
+              if (tableTo < state.doc.length && state.doc.sliceString(tableTo, tableTo + 1) === '\n') {
+                // don't include trailing newline in replacement
+              }
               builderBuffer.push(
-                buildRange(matchStart, descStart, Decoration.replace({}), tokenStartSide(node.type.id))
-              )
-              builderBuffer.push(
-                buildRange(descStart, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), tokenStartSide(node.type.id))
-              )
-              builderBuffer.push(
-                buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), tokenStartSide(node.type.id))
+                buildRange(
+                  tableFrom,
+                  tableTo,
+                  Decoration.replace({
+                    widget: new TableWidget(tableText),
+                    block: true,
+                  }),
+                  tokenStartSide(node.type.id),
+                )
               )
             } else {
-              // No description: hide [[ and ]]
-              builderBuffer.push(
-                buildRange(matchStart, matchStart + 2, Decoration.replace({}), tokenStartSide(node.type.id))
-              )
-              builderBuffer.push(
-                buildRange(matchStart + 2, matchEnd - 2, Decoration.mark({tagName: "a", attributes: { href: "#" }}), tokenStartSide(node.type.id))
-              )
-              builderBuffer.push(
-                buildRange(matchEnd - 2, matchEnd, Decoration.replace({}), tokenStartSide(node.type.id))
-              )
+              // Table is selected — show raw source with monospace styling
+              for (let i = line.number; i <= endLineNum; i++) {
+                const tl = state.doc.line(i)
+                builderBuffer.push(
+                  buildRange(
+                    tl.from,
+                    tl.from,
+                    Decoration.line({class: "org-table-row"}),
+                    tokenStartSide(node.type.id),
+                  )
+                )
+              }
             }
-          } else {
-            builderBuffer.push(
-              buildRange(matchStart, matchEnd, Decoration.mark({class: "org-link"}), tokenStartSide(node.type.id))
-            )
           }
+          // Non-first lines of the table are handled by the first-line branch above
+        } else {
+          // This specific line is selected — show raw monospace
+          builderBuffer.push(
+            buildRange(
+              line.from,
+              line.from,
+              Decoration.line({class: "org-table-row"}),
+              tokenStartSide(node.type.id),
+            )
+          )
         }
       } else if (nodeIsOrgLang && node.type.id === TOKEN.FixedWidthLine) {
         const line = state.doc.lineAt(node.from)
