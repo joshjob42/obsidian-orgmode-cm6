@@ -7,6 +7,8 @@ export interface OrgmodePluginSettings {
   bulletStyle: 'dash' | 'unicode' | 'none';
   headingStyle: 'stars' | 'noStars' | 'hashmarks';
   linkifyPlainUrls: boolean;
+  shadowIndexEnabled: boolean;
+  shadowIndexFolder: string;
 }
 
 export const DEFAULT_SETTINGS: OrgmodePluginSettings = {
@@ -18,6 +20,8 @@ export const DEFAULT_SETTINGS: OrgmodePluginSettings = {
   bulletStyle: 'unicode',
   headingStyle: 'stars',
   linkifyPlainUrls: false,
+  shadowIndexEnabled: true,
+  shadowIndexFolder: "_o",
 };
 
 export const BULLET_CHARS: Record<string, string[]> = {
