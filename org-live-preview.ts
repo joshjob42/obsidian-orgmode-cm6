@@ -44,14 +44,75 @@ class ImageWidget extends WidgetType {
 
 class TableWidget extends WidgetType {
   tableText: string
-  constructor(tableText: string) {
+  tableFrom: number
+  constructor(tableText: string, tableFrom: number) {
     super()
     this.tableText = tableText
+    this.tableFrom = tableFrom
   }
   eq(other: TableWidget) {
     return this.tableText === other.tableText
   }
   toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.className = "org-table-widget-wrapper"
+    wrapper.style.cursor = "text"
+    const tableFrom = this.tableFrom
+    wrapper.addEventListener("mousedown", (e) => {
+      const target = e.target as HTMLElement
+      // Find which row and column was clicked
+      let targetRow = 0
+      let targetCol = 0
+      const td = target.closest("td, th")
+      const tr = target.closest("tr")
+      if (tr) {
+        const rows = Array.from(wrapper.querySelectorAll("tr"))
+        const idx = rows.indexOf(tr)
+        if (idx >= 0) targetRow = idx
+        if (td) {
+          const cells = Array.from(tr.querySelectorAll("td, th"))
+          const cidx = cells.indexOf(td as HTMLTableCellElement)
+          if (cidx >= 0) targetCol = cidx
+        }
+      }
+      // Map visual row index to source line (skip hrule lines)
+      const sourceLines = this.tableText.split('\n').filter(l => l.trim().length > 0)
+      let dataRowIndex = 0
+      let targetLine = sourceLines[0] || ''
+      let targetLineOffset = 0
+      for (let i = 0; i < sourceLines.length; i++) {
+        const isHruleLine = /^\s*\|[-+| ]+\|?\s*$/.test(sourceLines[i])
+        if (!isHruleLine) {
+          if (dataRowIndex === targetRow) {
+            targetLine = sourceLines[i]
+            targetLineOffset = this.tableText.indexOf(sourceLines[i])
+            break
+          }
+          dataRowIndex++
+        }
+      }
+      // Find the end of the target column's content within the source line
+      let colOffset = 0
+      let pipeCount = 0
+      for (let j = 0; j < targetLine.length; j++) {
+        if (targetLine[j] === '|') {
+          pipeCount++
+          if (pipeCount === targetCol + 2) {
+            // Position cursor before this pipe, skipping trailing spaces
+            colOffset = j - 1
+            while (colOffset > 0 && targetLine[colOffset] === ' ') {
+              colOffset--
+            }
+            colOffset++ // position after last non-space char
+            break
+          }
+        }
+      }
+      const targetPos = tableFrom + targetLineOffset + colOffset
+      e.preventDefault()
+      view.dispatch({ selection: { anchor: targetPos } })
+      view.focus()
+    })
     const table = document.createElement("table");
     table.className = "org-table-widget"
 
@@ -112,7 +173,8 @@ class TableWidget extends WidgetType {
       isFirstRow = false
     }
 
-    return table
+    wrapper.appendChild(table)
+    return wrapper
   }
 
   private renderCellMarkup(text: string): string {
@@ -799,7 +861,7 @@ function loadDecorations(
                   tableFrom,
                   tableTo,
                   Decoration.replace({
-                    widget: new TableWidget(tableText),
+                    widget: new TableWidget(tableText, tableFrom),
                     block: true,
                   }),
                   tokenStartSide(node.type.id),
