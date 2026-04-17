@@ -54,6 +54,16 @@ export function nodeTypeClass(node_type_id: number): string {
     return "org-priority"
   } else if (node_type_id === TOKEN.Tags) {
     return "org-tags"
+  } else if (node_type_id === TOKEN.HorizontalRule) {
+    return "org-horizontal-rule"
+  } else if (node_type_id === TOKEN.FixedWidthLine) {
+    return "org-fixed-width"
+  } else if (node_type_id === TOKEN.ListItem) {
+    return "org-list-item"
+  } else if (node_type_id === TOKEN.TableRow) {
+    return "org-table-row"
+  } else if (node_type_id === TOKEN.TableHrule) {
+    return "org-table-hrule"
   }
   throw Error("Not a markup node")
 }

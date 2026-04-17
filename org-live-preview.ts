@@ -42,6 +42,40 @@ class ImageWidget extends WidgetType {
   }
 }
 
+class CheckboxWidget extends WidgetType {
+  checked: string  // " ", "X", or "-"
+  constructor(checked: string) {
+    super()
+    this.checked = checked
+  }
+  eq(other: CheckboxWidget) {
+    return this.checked == other.checked
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const input = document.createElement("input");
+    input.type = "checkbox"
+    input.className = "org-checkbox task-list-item-checkbox"
+    if (this.checked === "X") {
+      input.checked = true
+    } else if (this.checked === "-") {
+      input.indeterminate = true
+    }
+    input.disabled = true
+    return input
+  }
+}
+
+class HorizontalRuleWidget extends WidgetType {
+  eq(other: HorizontalRuleWidget) {
+    return true
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const hr = document.createElement("hr");
+    hr.className = "org-horizontal-rule"
+    return hr
+  }
+}
+
 class DynamicBlockWidget extends WidgetType {
   dynamicBlockParams: string
   dynamicBlockJsFilepath: string
@@ -490,6 +524,97 @@ function loadDecorations(
             tokenStartSide(node.type.id),
           )
         )
+      } else if (nodeIsOrgLang && node.type.id === TOKEN.HorizontalRule) {
+        if (!nodeIsSelected) {
+          let to = node.to
+          // Don't include trailing newline in the replacement
+          if (to > node.from && state.doc.sliceString(to-1, to) === '\n') {
+            to = to - 1
+          }
+          builderBuffer.push(
+            buildRange(
+              node.from,
+              to,
+              Decoration.replace({
+                widget: new HorizontalRuleWidget(),
+              }),
+              tokenStartSide(node.type.id),
+            )
+          )
+        } else {
+          builderBuffer.push(
+            buildRange(
+              node.from,
+              node.from,
+              Decoration.line({class: nodeTypeClass(node.type.id)}),
+              tokenStartSide(node.type.id),
+            )
+          )
+        }
+      } else if (nodeIsOrgLang && node.type.id === TOKEN.ListItem) {
+        const itemText = state.doc.sliceString(node.from, node.to)
+        const line = state.doc.lineAt(node.from)
+        // Detect checkbox pattern: bullet + space + [ ] or [X] or [-]
+        const checkboxMatch = itemText.match(/^(\s*(?:[-+]|\d+[.)])\s+)\[([ X\-])\]\s/)
+        if (checkboxMatch && !nodeIsSelected) {
+          const bulletLen = checkboxMatch[1].length
+          const checkboxChar = checkboxMatch[2]
+          // Replace the [X] / [ ] / [-] with a widget
+          builderBuffer.push(
+            buildRange(
+              node.from + bulletLen,
+              node.from + bulletLen + 3,
+              Decoration.replace({
+                widget: new CheckboxWidget(checkboxChar),
+              }),
+              tokenStartSide(node.type.id),
+            )
+          )
+        }
+        builderBuffer.push(
+          buildRange(
+            line.from,
+            line.from,
+            Decoration.line({class: nodeTypeClass(node.type.id)}),
+            tokenStartSide(node.type.id),
+          )
+        )
+      } else if (
+        nodeIsOrgLang && (
+          node.type.id === TOKEN.TableRow ||
+          node.type.id === TOKEN.TableHrule
+        )
+      ) {
+        const line = state.doc.lineAt(node.from)
+        builderBuffer.push(
+          buildRange(
+            line.from,
+            line.from,
+            Decoration.line({class: nodeTypeClass(node.type.id)}),
+            tokenStartSide(node.type.id),
+          )
+        )
+      } else if (nodeIsOrgLang && node.type.id === TOKEN.FixedWidthLine) {
+        const line = state.doc.lineAt(node.from)
+        builderBuffer.push(
+          buildRange(
+            line.from,
+            line.from,
+            Decoration.line({class: nodeTypeClass(node.type.id)}),
+            tokenStartSide(node.type.id),
+          )
+        )
+        if (!nodeIsSelected) {
+          // Hide the ": " prefix
+          builderBuffer.push(
+            buildRange(
+              node.from,
+              node.from + 2,
+              Decoration.replace({}),
+              tokenStartSide(node.type.id),
+            )
+          )
+        }
       }
     },
   })

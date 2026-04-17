@@ -48,6 +48,11 @@ import {
   propertyDrawerHeader,
   PropertyDrawerContent,
   propertyDrawerFooter,
+  HorizontalRule,
+  FixedWidthLine,
+  ListItem,
+  TableRow,
+  TableHrule,
 } from './parser.terms';
 
 const NEW_LINE = '\n'.charCodeAt(0);
@@ -420,6 +425,81 @@ export const block_tokenizer = new ExternalTokenizer((input, stack) => {
         input.acceptToken(BlockHeader, peek_distance)
         return
       }
+    }
+    // Check for HorizontalRule
+    if (checkHorizontalRule(input, stack)) {
+      let hr_peek = 0
+      let c = input.peek(hr_peek)
+      while (c === DASH) {
+        hr_peek += 1
+        c = input.peek(hr_peek)
+      }
+      while (isWhiteSpace(c)) {
+        hr_peek += 1
+        c = input.peek(hr_peek)
+      }
+      if (c === NEW_LINE) {
+        hr_peek += 1
+      }
+      input.advance(hr_peek)
+      log(`== ACCEPT HorizontalRule ${inputStreamAccept(input, stack)}`)
+      input.acceptToken(HorizontalRule)
+      return
+    }
+    // Check for FixedWidthLine
+    if (checkFixedWidthLine(input, stack)) {
+      let fw_peek = 2
+      let c = input.peek(fw_peek)
+      while (!isEndOfLine(c)) {
+        fw_peek += 1
+        c = input.peek(fw_peek)
+      }
+      if (c === NEW_LINE) {
+        fw_peek += 1
+      }
+      input.advance(fw_peek)
+      log(`== ACCEPT FixedWidthLine ${inputStreamAccept(input, stack)}`)
+      input.acceptToken(FixedWidthLine)
+      return
+    }
+    // Check for ListItem
+    if (checkListItem(input, stack)) {
+      let li_peek = 0
+      let c = input.peek(li_peek)
+      // Consume to end of line
+      while (!isEndOfLine(c)) {
+        li_peek += 1
+        c = input.peek(li_peek)
+      }
+      if (c === NEW_LINE) {
+        li_peek += 1
+      }
+      input.advance(li_peek)
+      log(`== ACCEPT ListItem ${inputStreamAccept(input, stack)}`)
+      input.acceptToken(ListItem)
+      return
+    }
+    // Check for Table rows
+    const tableType = checkTableRow(input, stack)
+    if (tableType) {
+      let t_peek = 0
+      let c = input.peek(t_peek)
+      while (!isEndOfLine(c)) {
+        t_peek += 1
+        c = input.peek(t_peek)
+      }
+      if (c === NEW_LINE) {
+        t_peek += 1
+      }
+      input.advance(t_peek)
+      if (tableType === 'hrule') {
+        log(`== ACCEPT TableHrule ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(TableHrule)
+      } else {
+        log(`== ACCEPT TableRow ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(TableRow)
+      }
+      return
     }
     log(`== ACCEPT notStartOfABlock ${inputStreamAccept(input, stack)}`)
     input.acceptToken(notStartOfABlock, -(input.pos-stack.pos))
@@ -1683,6 +1763,26 @@ export const object_tokenizer = (orgLinkParameters: string[]) => {
         log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before Block ${inputStreamAccept(input, stack)}`)
         input.acceptToken(objectToken)
         return
+      ///// start of horizontal rule /////
+      } else if (checkHorizontalRule(input, stack)) {
+        log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before HorizontalRule ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(objectToken)
+        return
+      ///// start of fixed-width line /////
+      } else if (checkFixedWidthLine(input, stack)) {
+        log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before FixedWidthLine ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(objectToken)
+        return
+      ///// start of list item /////
+      } else if (checkListItem(input, stack)) {
+        log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before ListItem ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(objectToken)
+        return
+      ///// start of table row /////
+      } else if (checkTableRow(input, stack)) {
+        log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before TableRow ${inputStreamAccept(input, stack)}`)
+        input.acceptToken(objectToken)
+        return
       ///// start of comment /////
       } else if (checkComment(input, stack)) {
         log(`== ACCEPT object_tokenizer innermostParent=${innerMostParent} before comment ${inputStreamAccept(input, stack)}`)
@@ -1839,6 +1939,120 @@ export const object_tokenizer = (orgLinkParameters: string[]) => {
       log(stringifyCodeLogString(c))
     }
   })
+}
+
+const DASH = '-'.charCodeAt(0)
+
+function checkHorizontalRule(input: InputStream, stack: Stack) {
+  let previous = input.peek(-1)
+  if (!isEndOfLine(previous)) {
+    return false
+  }
+  let c = input.peek(0)
+  if (c !== DASH) {
+    return false
+  }
+  let peek_distance = 0
+  let dashCount = 0
+  while (c === DASH) {
+    dashCount += 1
+    peek_distance += 1
+    c = input.peek(peek_distance)
+  }
+  if (dashCount < 5) {
+    return false
+  }
+  while (isWhiteSpace(c)) {
+    peek_distance += 1
+    c = input.peek(peek_distance)
+  }
+  if (!isEndOfLine(c)) {
+    return false
+  }
+  return true
+}
+
+function checkListItem(input: InputStream, stack: Stack) {
+  let previous = input.peek(-1)
+  if (!isEndOfLine(previous)) {
+    return false
+  }
+  let peek_distance = 0
+  let c = input.peek(peek_distance)
+  // Allow leading whitespace (indentation for nested lists)
+  while (isWhiteSpace(c)) {
+    peek_distance += 1
+    c = input.peek(peek_distance)
+  }
+  // Check for unordered list bullet: - or +
+  if ((c === DASH || c === '+'.charCodeAt(0)) && isWhiteSpace(input.peek(peek_distance + 1))) {
+    return true
+  }
+  // Check for ordered list: digits followed by . or )
+  if (c >= '0'.charCodeAt(0) && c <= '9'.charCodeAt(0)) {
+    while (c >= '0'.charCodeAt(0) && c <= '9'.charCodeAt(0)) {
+      peek_distance += 1
+      c = input.peek(peek_distance)
+    }
+    if ((c === '.'.charCodeAt(0) || c === ')'.charCodeAt(0)) && isWhiteSpace(input.peek(peek_distance + 1))) {
+      return true
+    }
+  }
+  return false
+}
+
+const PIPE = '|'.charCodeAt(0)
+
+function checkTableRow(input: InputStream, stack: Stack): 'row' | 'hrule' | false {
+  let previous = input.peek(-1)
+  if (!isEndOfLine(previous)) {
+    return false
+  }
+  let peek_distance = 0
+  let c = input.peek(peek_distance)
+  if (c !== PIPE) {
+    return false
+  }
+  // Check if this is a separator row: | followed by dashes, +, |, spaces only
+  peek_distance += 1
+  c = input.peek(peek_distance)
+  let isSeparator = true
+  let hasContent = false
+  while (!isEndOfLine(c)) {
+    if (c === DASH || c === '+'.charCodeAt(0) || c === PIPE || isWhiteSpace(c)) {
+      // valid separator chars
+    } else {
+      isSeparator = false
+    }
+    if (c !== PIPE && !isWhiteSpace(c)) {
+      hasContent = true
+    }
+    peek_distance += 1
+    c = input.peek(peek_distance)
+  }
+  if (!hasContent) {
+    return false  // just "|" alone or "| |" with no real content
+  }
+  if (isSeparator) {
+    return 'hrule'
+  }
+  return 'row'
+}
+
+function checkFixedWidthLine(input: InputStream, stack: Stack) {
+  let previous = input.peek(-1)
+  if (!isEndOfLine(previous)) {
+    return false
+  }
+  let c = input.peek(0)
+  if (c !== COLON) {
+    return false
+  }
+  let second = input.peek(1)
+  if (second !== SPACE) {
+    return false
+  }
+  return true
 }
 
 enum ParentObject {

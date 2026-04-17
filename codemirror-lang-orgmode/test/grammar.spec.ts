@@ -902,6 +902,394 @@ test("links with surrounding spaces are links", () => {
   testTree(tree, spec)
 })
 
+test("horizontal rule", () => {
+  const content = [
+    "text before",
+    "-----",
+    "text after",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        HorizontalRule,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("horizontal rule with more dashes", () => {
+  const content = [
+    "----------",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        HorizontalRule,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("horizontal rule with trailing spaces", () => {
+  const content = "-----   "
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        HorizontalRule,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("four dashes is not a horizontal rule", () => {
+  const content = "----"
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection,",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("horizontal rule in a heading section", () => {
+  const content = [
+    "* heading",
+    "text",
+    "-----",
+    "more text",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    Heading(Title, Section(",
+    "        HorizontalRule,",
+    "    )),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("fixed-width line", () => {
+  const content = ": This is a fixed-width line"
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        FixedWidthLine,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("multiple fixed-width lines", () => {
+  const content = [
+    ": line one",
+    ": line two",
+    "normal text",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        FixedWidthLine,",
+    "        FixedWidthLine,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("fixed-width line in heading section", () => {
+  const content = [
+    "* heading",
+    ": example content",
+    "normal text",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    Heading(Title, Section(",
+    "        FixedWidthLine,",
+    "    )),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("unordered list with dash", () => {
+  const content = [
+    "- item one",
+    "- item two",
+    "- item three",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("ordered list", () => {
+  const content = [
+    "1. first",
+    "2. second",
+    "3. third",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("list with checkboxes", () => {
+  const content = [
+    "- [ ] unchecked",
+    "- [X] checked",
+    "- [-] partial",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("nested list", () => {
+  const content = [
+    "- item one",
+    "  - nested item",
+    "  - another nested",
+    "- item two",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("mixed ordered and unordered list", () => {
+  const content = [
+    "- unordered",
+    "  1. ordered nested",
+    "  2. another ordered",
+    "- back to unordered",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("list in heading section", () => {
+  const content = [
+    "* heading",
+    "- item one",
+    "- item two",
+    "text after",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    Heading(Title, Section(",
+    "        ListItem,",
+    "        ListItem,",
+    "    )),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("ordered list with parenthesis", () => {
+  const content = [
+    "1) first",
+    "2) second",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("list with plus bullet", () => {
+  const content = [
+    "+ item one",
+    "+ item two",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        ListItem,",
+    "        ListItem,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("basic table", () => {
+  const content = [
+    "| col1 | col2 |",
+    "|------+------|",
+    "| a    | b    |",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        TableRow,",
+    "        TableHrule,",
+    "        TableRow,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("table without alignment", () => {
+  const content = [
+    "|*Heading1*|*head2*|",
+    "|-+--|",
+    "|entry|42|",
+    "|foo|21.7|",
+    "|-+-|",
+    "|end|99.99|",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        TableRow,",
+    "        TableHrule,",
+    "        TableRow,",
+    "        TableRow,",
+    "        TableHrule,",
+    "        TableRow,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("table in heading section", () => {
+  const content = [
+    "* heading",
+    "| a | b |",
+    "| c | d |",
+    "text after",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    Heading(Title, Section(",
+    "        TableRow,",
+    "        TableRow,",
+    "    )),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("colon without space is not fixed-width", () => {
+  const content = ":not-fixed-width"
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection,",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
 test("infinite loop testing", () => {
   parser.parse("")
   parser.parse("*")
