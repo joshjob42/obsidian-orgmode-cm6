@@ -176,6 +176,37 @@
   color: var(--link-color);
 }
 
+.orgmode-view hr.org-horizontal-rule {
+  border: none;
+  border-top: 1px solid var(--hr-color, var(--text-faint));
+  margin: 0.5em 0;
+}
+
+.orgmode-view .org-fixed-width {
+  font-family: var(--font-monospace);
+  background-color: var(--code-background);
+}
+
+.orgmode-view .org-checkbox {
+  margin-right: 0.2em;
+  vertical-align: middle;
+}
+
+.orgmode-view .org-table-row,
+.orgmode-view .org-table-hrule {
+  font-family: var(--font-monospace);
+}
+
+.theme-dark .orgmode-view .org-table-row,
+.theme-dark .orgmode-view .org-table-hrule {
+  color: #b9cddb;
+}
+
+.theme-light .orgmode-view .org-table-row,
+.theme-light .orgmode-view .org-table-hrule {
+  color: rgb(58, 69, 74);
+}
+
 .theme-dark .orgmode-view .org-block {
   background-color: var(--code-background);
   font-family: var(--font-monospace);

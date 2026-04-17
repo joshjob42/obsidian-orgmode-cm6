@@ -44,6 +44,11 @@ Section {
 
 lesserElement {  // excluding Planning and Comment
   Block |
+  HorizontalRule |
+  FixedWidthLine |
+  ListItem |
+  TableRow |
+  TableHrule |
   (
     notStartOfABlock
     (
@@ -173,7 +178,12 @@ TextStrikeThrough {
 @external tokens block_tokenizer from "./external-tokens" {
   notStartOfABlock,
   BlockHeader,
-  BlockFooter
+  BlockFooter,
+  HorizontalRule,
+  FixedWidthLine,
+  ListItem,
+  TableRow,
+  TableHrule
 }
 
 @external tokens blockContent_tokenizer from "./external-tokens" {
