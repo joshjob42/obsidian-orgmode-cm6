@@ -232,8 +232,22 @@ class CheckboxWidget extends WidgetType {
     } else if (this.checked === "-") {
       input.indeterminate = true
     }
-    input.disabled = true
+    input.addEventListener("mousedown", (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const pos = view.posAtDOM(input)
+      if (pos < 0) return
+      const charPos = pos + 1  // skip past the '[' to the state character
+      const current = view.state.doc.sliceString(charPos, charPos + 1)
+      const next = current === " " ? "X" : " "
+      view.dispatch({
+        changes: { from: charPos, to: charPos + 1, insert: next },
+      })
+    })
     return input
+  }
+  ignoreEvent(event: Event): boolean {
+    return event.type === "mousedown" || event.type === "click"
   }
 }
 
