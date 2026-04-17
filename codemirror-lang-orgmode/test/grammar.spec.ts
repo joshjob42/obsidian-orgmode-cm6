@@ -1277,6 +1277,67 @@ test("table in heading section", () => {
   testTree(tree, spec)
 })
 
+test("table with formatting in cells", () => {
+  const content = [
+    "| *bold* | /italic/ |",
+    "| _under_ | +strike+ |",
+    "| =code= | ~cmd~ |",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        TableRow,",
+    "        TableRow,",
+    "        TableRow,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("table with links in cells", () => {
+  const content = [
+    "| [[https://example.com][Example]] | text |",
+    "| [[https://other.com]] | more |",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        TableRow,",
+    "        TableRow,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
+test("table with multiple columns", () => {
+  const content = [
+    "| *When* | *What* | *USD* | *EUR* |",
+    "|--------+--------+-------+-------|",
+    "| 2012-02-03 | Taxi | 25.00 | 19.12 |",
+  ].join("\n")
+  const tree = parser.parse(content)
+  const spec = [
+    "Program(",
+    "    ZerothSection(",
+    "        TableRow,",
+    "        TableHrule,",
+    "        TableRow,",
+    "    ),",
+    ")",
+  ].join("\n")
+  console.log(printTree(tree, content))
+  parser.configure({strict: true}).parse(content)
+  testTree(tree, spec)
+})
+
 test("colon without space is not fixed-width", () => {
   const content = ":not-fixed-width"
   const tree = parser.parse(content)
