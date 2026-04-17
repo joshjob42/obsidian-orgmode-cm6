@@ -222,8 +222,6 @@
 .orgmode-view .org-table-row,
 .orgmode-view .org-table-hrule {
   font-family: var(--font-monospace);
-  font-size: 0.9em;
-  color: var(--text-muted);
 }
 
 .theme-dark .orgmode-view .org-block {
